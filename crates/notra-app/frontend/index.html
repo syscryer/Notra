@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Notra</title>
+  </head>
+  <body>
+    <svg class="icon-sprite" aria-hidden="true">
+      <symbol id="icon-files" viewBox="0 0 24 24">
+        <path d="M7 3.8h7.2l3.8 3.8v12.6H7z" />
+        <path d="M14 3.8v4h4" />
+        <path d="M4 7.8h3v12.4h10" />
+      </symbol>
+      <symbol id="icon-search" viewBox="0 0 24 24">
+        <circle cx="10.8" cy="10.8" r="6.2" />
+        <path d="m15.4 15.4 4.4 4.4" />
+      </symbol>
+      <symbol id="icon-panel" viewBox="0 0 24 24">
+        <rect x="4" y="5" width="16" height="14" rx="2" />
+        <path d="M4 14h16" />
+      </symbol>
+      <symbol id="icon-moon" viewBox="0 0 24 24">
+        <path d="M18.2 15.7A7.5 7.5 0 0 1 8.3 5.8 8 8 0 1 0 18.2 15.7z" />
+      </symbol>
+      <symbol id="icon-plus" viewBox="0 0 24 24">
+        <path d="M12 5v14" />
+        <path d="M5 12h14" />
+      </symbol>
+      <symbol id="icon-folder" viewBox="0 0 24 24">
+        <path d="M4 6.5h6l2 2h8v9.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+      </symbol>
+      <symbol id="icon-save" viewBox="0 0 24 24">
+        <path d="M5 4h12l2 2v14H5z" />
+        <path d="M8 4v6h7V4" />
+        <path d="M8 16h8" />
+      </symbol>
+      <symbol id="icon-markdown" viewBox="0 0 24 24">
+        <rect x="3.5" y="6" width="17" height="12" rx="2" />
+        <path d="M7 15v-6l2.2 3 2.3-3v6" />
+        <path d="M15.5 9v6" />
+        <path d="m13.5 13 2 2 2-2" />
+      </symbol>
+    </svg>
+    <main id="app">
+      <header class="titlebar">
+        <section class="brand">
+          <div class="brand-mark">N</div>
+          <div class="brand-copy">
+            <strong>Notra</strong>
+            <span id="activePath">未保存</span>
+          </div>
+        </section>
+        <section class="title-actions">
+          <span class="pill" id="dirtyCount">0 未保存</span>
+          <span class="pill ok">索引就绪</span>
+          <span class="pill" id="workspaceState">未打开目录</span>
+          <button class="mini-button" id="themeButton">深色</button>
+        </section>
+      </header>
+
+      <nav class="toolbar">
+        <div class="tool-group">
+          <button class="tool-button" id="newButton"><svg><use href="#icon-plus"></use></svg><span>新建</span></button>
+          <button class="tool-button" id="openButton"><svg><use href="#icon-folder"></use></svg><span>打开</span></button>
+          <button class="tool-button" id="recentButton">最近</button>
+          <button class="tool-button" id="workspaceButton"><svg><use href="#icon-files"></use></svg><span>打开目录</span></button>
+          <span class="tool-divider"></span>
+          <button class="tool-button primary" id="saveButton"><svg><use href="#icon-save"></use></svg><span>保存</span></button>
+          <button class="tool-button" id="saveAsButton">另存为</button>
+          <button class="tool-button" id="saveAllButton">保存全部</button>
+          <span class="tool-divider"></span>
+          <button class="tool-button" id="undoButton">撤销</button>
+          <button class="tool-button" id="redoButton">重做</button>
+          <button class="tool-button" id="markdownPreviewButton"><svg><use href="#icon-markdown"></use></svg><span>MD 预览</span></button>
+        </div>
+
+        <button class="command-box" id="commandBox">命令搜索 / 文件名 / 符号</button>
+
+        <div class="tool-group right">
+          <button class="tool-button" id="languageButton">语言: Plain Text</button>
+          <button class="tool-button" id="encodingButton">UTF-8</button>
+          <button class="tool-button" id="lineEndingButton">LF</button>
+          <span class="readonly-pill" id="readonlyState">可编辑</span>
+        </div>
+      </nav>
+
+      <section class="tabs" id="tabs"></section>
+
+      <section class="workspace" id="workspace">
+        <aside class="activity-rail" id="activityRail">
+          <button class="rail-button active" id="directoryToggle" aria-label="目录" title="目录">
+            <svg><use href="#icon-files"></use></svg>
+          </button>
+          <button class="rail-button" id="findRailButton" aria-label="查找" title="查找">
+            <svg><use href="#icon-search"></use></svg>
+          </button>
+          <button class="rail-button" id="bottomRailButton" aria-label="输出面板" title="输出面板">
+            <svg><use href="#icon-panel"></use></svg>
+          </button>
+          <div class="rail-spacer"></div>
+          <button class="rail-button" id="themeRailButton" aria-label="切换主题" title="切换主题">
+            <svg><use href="#icon-moon"></use></svg>
+          </button>
+        </aside>
+
+        <aside class="explorer" id="explorer">
+          <header class="explorer-head">
+            <strong id="workspaceTitle">工作目录</strong>
+            <div class="explorer-actions">
+              <button class="ghost-button" id="refreshDirectoryButton">刷新</button>
+              <button class="ghost-button" id="closeDirectoryButton">关闭</button>
+            </div>
+          </header>
+          <div class="explorer-body" id="tree"></div>
+        </aside>
+
+        <section class="editor-area">
+          <div class="editor-wrap">
+            <div id="editor"></div>
+          </div>
+          <aside class="markdown-preview hidden" id="markdownPreview"></aside>
+        </section>
+      </section>
+
+      <section class="popover hidden" id="languageMenu">
+        <header class="popover-head">
+          <strong>语言</strong>
+          <span>选择当前文档语法</span>
+        </header>
+        <div class="menu-list" id="languageList"></div>
+      </section>
+
+      <section class="popover hidden" id="recentMenu">
+        <header class="popover-head">
+          <strong>最近文件</strong>
+          <button class="ghost-button" id="clearRecentButton">清空</button>
+        </header>
+        <div class="menu-list" id="recentList"></div>
+      </section>
+
+      <section class="popover hidden" id="encodingMenu">
+        <header class="popover-head">
+          <strong>编码</strong>
+          <span id="encodingNotice">当前使用 UTF-8</span>
+        </header>
+        <div class="menu-section-title">使用编码重新解释</div>
+        <div class="menu-list" id="useEncodingList"></div>
+        <div class="menu-section-title">转换并保存为</div>
+        <div class="menu-list" id="convertEncodingList"></div>
+      </section>
+
+      <section class="popover hidden" id="lineEndingMenu">
+        <header class="popover-head">
+          <strong>行尾</strong>
+          <span>转换当前文档行尾</span>
+        </header>
+        <div class="menu-list" id="lineEndingList"></div>
+      </section>
+
+      <section class="command-popover hidden" id="commandPalette">
+        <header class="popover-head">
+          <strong>命令</strong>
+          <span>执行常用动作或打开文件</span>
+        </header>
+        <input id="commandInput" placeholder="输入命令、文件名或语言" />
+        <div class="command-list" id="commandList"></div>
+      </section>
+
+      <section class="find-popover hidden" id="findPopover">
+        <div class="segmented">
+          <button class="seg active">查找</button>
+          <button class="seg">替换</button>
+          <button class="seg">文件查找</button>
+          <button class="seg">标记</button>
+        </div>
+        <div class="find-body">
+          <div class="field-stack">
+            <label><span>查找目标</span><input id="findInput" list="findHistoryList" /></label>
+            <label><span>替换为</span><input id="replaceInput" list="replaceHistoryList" /></label>
+            <label><span>目录</span><input id="directoryInput" /></label>
+            <label><span>文件过滤</span><input id="fileGlobInput" value="*.*" /></label>
+            <label><span>跳过目录</span><input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" /></label>
+            <label><span>搜索模式</span>
+              <select id="searchModeInput">
+                <option value="literal">普通</option>
+                <option value="extended">扩展</option>
+                <option value="regex">正则</option>
+              </select>
+            </label>
+            <div class="checks">
+              <label><input type="checkbox" id="matchCaseInput" />匹配大小写</label>
+              <label><input type="checkbox" id="wholeWordInput" />全词匹配</label>
+              <label><input type="checkbox" id="recursiveInput" checked />递归子目录</label>
+              <label><input type="checkbox" id="includeHiddenInput" />包含隐藏项</label>
+            </div>
+            <div class="history-pane">
+              <div>
+                <header><span>查找历史</span><button id="favoriteSearchButton">收藏</button></header>
+                <div class="history-list" id="searchHistoryList"></div>
+              </div>
+              <div>
+                <header><span>搜索收藏</span><button id="clearFavoritesButton">清空</button></header>
+                <div class="history-list" id="searchFavoritesList"></div>
+              </div>
+              <div>
+                <header><span>替换历史</span><button id="clearHistoryButton">清空</button></header>
+                <div class="history-list" id="replaceHistoryList"></div>
+              </div>
+            </div>
+            <datalist id="findHistoryList"></datalist>
+            <datalist id="replaceHistoryDataList"></datalist>
+          </div>
+          <div class="action-stack">
+            <button class="primary" id="findNextButton">查找下一个</button>
+            <button id="findCurrentButton">在当前文件中查找</button>
+            <button id="findOpenButton">打开文档查找</button>
+            <button id="findWorkspaceButton">目录查找</button>
+            <button id="previewReplaceButton">替换预览</button>
+            <button id="replaceCurrentButton">替换当前文件</button>
+            <button id="replaceOpenButton">替换打开文档</button>
+            <button id="closeFindButton">取消</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="bottom-panel" id="bottomPanel">
+        <header class="panel-head">
+          <div class="panel-tabs">
+            <button class="panel-tab active" data-panel="results">查找结果</button>
+            <button class="panel-tab" data-panel="preview">替换预览</button>
+            <button class="panel-tab" data-panel="logs">日志</button>
+          </div>
+          <button class="tool-button" id="collapseBottomButton">收起</button>
+        </header>
+        <div class="panel-body" id="panelBody"></div>
+      </section>
+
+      <footer class="statusbar">
+        <div class="status-left" id="statusLeft"></div>
+        <div class="status-right" id="statusRight"></div>
+      </footer>
+
+      <section class="modal-backdrop hidden" id="unsavedDialog" role="dialog" aria-modal="true" aria-labelledby="unsavedTitle">
+        <div class="modal">
+          <header>
+            <strong id="unsavedTitle">保存修改</strong>
+            <span id="unsavedSubtitle">文档有未保存的修改</span>
+          </header>
+          <div class="modal-body" id="unsavedBody"></div>
+          <footer>
+            <button class="tool-button" id="unsavedCancelButton">取消</button>
+            <button class="tool-button" id="unsavedDiscardButton">不保存</button>
+            <button class="tool-button primary" id="unsavedSaveButton">保存</button>
+          </footer>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

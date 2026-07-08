@@ -1,0 +1,109 @@
+{
+  version: "1.0"
+
+  project: {
+    name: "notra"
+    description: "漂亮、便捷、速度快的 Rust 原生文本编辑器，核心强化搜索与替换。"
+  }
+
+  server: {
+    host: "127.0.0.1"
+    port: 17321
+  }
+
+  worktree: {
+    discovery: {
+      mode: "git"
+    }
+    binaries: {
+      path: "{{.Worktree.Root}}/target/debug"
+    }
+  }
+
+  services: [
+  ]
+
+  workflows: [
+    {
+      id: "00-product"
+      name: "00 产品定义"
+      description: "梳理产品原则、功能边界和 v0.1 范围。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/phase.ps1", "00-product"]
+      timeout: "5m"
+      output_parser: "generic"
+    }
+    {
+      id: "01-ui-prototype"
+      name: "01 UI 原型"
+      description: "设计 Catio/mxterm 风格的编辑器工作台和搜索替换面板。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/phase.ps1", "01-ui-prototype"]
+      timeout: "5m"
+      output_parser: "generic"
+    }
+    {
+      id: "02-architecture"
+      name: "02 架构设计"
+      description: "确定 Rust workspace、编辑核心、渲染、搜索替换和文件系统边界。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/phase.ps1", "02-architecture"]
+      timeout: "5m"
+      output_parser: "generic"
+    }
+    {
+      id: "03-editor-core"
+      name: "03 编辑核心"
+      description: "实现文本缓冲、光标、选择、撤销重做和大文件策略。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/phase.ps1", "03-editor-core"]
+      timeout: "5m"
+      output_parser: "generic"
+    }
+    {
+      id: "04-search-replace"
+      name: "04 搜索替换"
+      description: "实现当前文件、打开文档、目录搜索和批量替换预览。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/phase.ps1", "04-search-replace"]
+      timeout: "5m"
+      output_parser: "generic"
+    }
+    {
+      id: "05-performance"
+      name: "05 性能验证"
+      description: "验证启动、打开大文件、搜索、替换和滚动性能。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/phase.ps1", "05-performance"]
+      timeout: "5m"
+      output_parser: "generic"
+    }
+    {
+      id: "check"
+      name: "检查项目状态"
+      description: "查看当前阶段记录和项目文件状态。"
+      command: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/trellis/check.ps1"]
+      timeout: "2m"
+      output_parser: "generic"
+    }
+    {
+      id: "test"
+      name: "运行测试"
+      description: "运行 Rust workspace 测试。"
+      command: ["cargo", "test", "--workspace"]
+      timeout: "10m"
+      output_parser: "generic"
+    }
+    {
+      id: "check-rust"
+      name: "Rust 检查"
+      description: "运行 cargo check。"
+      command: ["cargo", "check", "--workspace"]
+      timeout: "10m"
+      output_parser: "generic"
+    }
+  ]
+
+  crashes: {
+    enabled: true
+    retention_days: 14
+  }
+
+  terminal: {
+    shell: "powershell"
+  }
+}

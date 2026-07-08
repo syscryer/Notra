@@ -1,0 +1,14 @@
+target/
+crates/notra-app/gen/
+crates/notra-app/frontend/dist/
+crates/notra-app/frontend/node_modules/
+.reference/
+.learnings/
+.idea/
+.vscode/
+*.log
+*.tmp
+*.bak
+*.swp
+Thumbs.db
+desktop.ini
