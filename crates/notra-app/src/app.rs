@@ -6,9 +6,96 @@ use notra_core::{
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-const TREE_LIMIT: usize = 600;
-const TREE_MAX_DEPTH: usize = 4;
+const TREE_LIMIT: usize = 2500;
+const TREE_MAX_DEPTH: usize = 8;
+const SUPPORTED_LANGUAGES: &[&str] = &[
+    "plaintext",
+    "abap",
+    "apex",
+    "azcli",
+    "bat",
+    "bicep",
+    "cameligo",
+    "clojure",
+    "coffee",
+    "cpp",
+    "csharp",
+    "csp",
+    "css",
+    "cypher",
+    "dart",
+    "dockerfile",
+    "ecl",
+    "elixir",
+    "flow9",
+    "freemarker2",
+    "fsharp",
+    "go",
+    "graphql",
+    "handlebars",
+    "hcl",
+    "html",
+    "ini",
+    "java",
+    "javascript",
+    "json",
+    "julia",
+    "kotlin",
+    "less",
+    "lexon",
+    "liquid",
+    "lua",
+    "m3",
+    "markdown",
+    "mdx",
+    "mips",
+    "msdax",
+    "mysql",
+    "objective-c",
+    "pascal",
+    "pascaligo",
+    "perl",
+    "pgsql",
+    "php",
+    "pla",
+    "postiats",
+    "powerquery",
+    "powershell",
+    "protobuf",
+    "pug",
+    "python",
+    "qsharp",
+    "r",
+    "razor",
+    "redis",
+    "redshift",
+    "restructuredtext",
+    "ruby",
+    "rust",
+    "sb",
+    "scala",
+    "scheme",
+    "scss",
+    "shell",
+    "solidity",
+    "sophia",
+    "sparql",
+    "sql",
+    "st",
+    "swift",
+    "systemverilog",
+    "tcl",
+    "toml",
+    "twig",
+    "typescript",
+    "typespec",
+    "vb",
+    "wgsl",
+    "xml",
+    "yaml",
+];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -106,6 +193,13 @@ pub struct SaveRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DialogPathRequest {
+    pub default_dir: Option<String>,
+    pub file_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchRequest {
     pub root: String,
     pub query: String,
@@ -158,15 +252,53 @@ pub struct ApplyReplaceRequest {
     pub max_file_size: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceMutationDto {
+    pub workspace: WorkspaceDto,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCreateRequest {
+    pub root: String,
+    pub parent: String,
+    pub name: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceRenameRequest {
+    pub root: String,
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePathRequest {
+    pub root: String,
+    pub path: String,
+}
+
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             open_file_dialog,
+            pick_file_path,
             open_path,
             reopen_path_with_encoding,
+            pick_save_path,
             save_document,
+            pick_workspace_path,
             choose_workspace,
             read_workspace,
+            create_workspace_entry,
+            rename_workspace_entry,
+            delete_workspace_entry,
+            reveal_workspace_entry,
             search_workspace,
             preview_workspace_replace,
             apply_workspace_replace,
@@ -180,10 +312,21 @@ pub fn run() {
 
 #[tauri::command]
 async fn open_file_dialog() -> Result<Option<DocumentDto>, String> {
-    let Some(path) = rfd::FileDialog::new().pick_file() else {
+    let Some(path) = pick_file_path(DialogPathRequest {
+        default_dir: None,
+        file_name: None,
+    })?
+    else {
         return Ok(None);
     };
-    open_path(path.display().to_string()).await.map(Some)
+    open_path(path).await.map(Some)
+}
+
+#[tauri::command]
+fn pick_file_path(request: DialogPathRequest) -> Result<Option<String>, String> {
+    Ok(configure_dialog(request)
+        .pick_file()
+        .map(|path| path.display().to_string()))
 }
 
 #[tauri::command]
@@ -243,9 +386,7 @@ async fn save_document(request: SaveRequest) -> Result<DocumentDto, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let path = match request.path {
             Some(path) => PathBuf::from(path),
-            None => rfd::FileDialog::new()
-                .save_file()
-                .ok_or_else(|| "已取消保存".to_owned())?,
+            None => return Err("保存路径不能为空".to_owned()),
         };
 
         let mut doc = if path.exists() {
@@ -266,11 +407,44 @@ async fn save_document(request: SaveRequest) -> Result<DocumentDto, String> {
 }
 
 #[tauri::command]
+fn pick_save_path(request: DialogPathRequest) -> Result<Option<String>, String> {
+    Ok(configure_dialog(request)
+        .save_file()
+        .map(|path| path.display().to_string()))
+}
+
+#[tauri::command]
 async fn choose_workspace() -> Result<Option<WorkspaceDto>, String> {
-    let Some(path) = rfd::FileDialog::new().pick_folder() else {
+    let Some(path) = pick_workspace_path(DialogPathRequest {
+        default_dir: None,
+        file_name: None,
+    })?
+    else {
         return Ok(None);
     };
-    read_workspace(path.display().to_string()).await.map(Some)
+    read_workspace(path).await.map(Some)
+}
+
+#[tauri::command]
+fn pick_workspace_path(request: DialogPathRequest) -> Result<Option<String>, String> {
+    Ok(configure_dialog(request)
+        .pick_folder()
+        .map(|path| path.display().to_string()))
+}
+
+fn configure_dialog(request: DialogPathRequest) -> rfd::FileDialog {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(default_dir) = request
+        .default_dir
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir())
+    {
+        dialog = dialog.set_directory(default_dir);
+    }
+    if let Some(file_name) = request.file_name.filter(|name| !name.trim().is_empty()) {
+        dialog = dialog.set_file_name(file_name);
+    }
+    dialog
 }
 
 #[tauri::command]
@@ -284,6 +458,105 @@ async fn read_workspace(path: String) -> Result<WorkspaceDto, String> {
     })
     .await
     .map_err(|err| format!("读取目录失败：{err}"))?
+}
+
+#[tauri::command]
+async fn create_workspace_entry(
+    request: WorkspaceCreateRequest,
+) -> Result<WorkspaceMutationDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(request.root);
+        let parent = workspace_existing_path(&root, &PathBuf::from(request.parent))?;
+        if !parent.is_dir() {
+            return Err(format!("目标不是目录：{}", parent.display()));
+        }
+        let name = sanitize_workspace_entry_name(&request.name)?;
+        let path = parent.join(name);
+        ensure_new_workspace_path(&root, &path)?;
+        if request.is_dir {
+            fs::create_dir(&path).map_err(|err| format!("新建文件夹失败：{err}"))?;
+        } else {
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .map_err(|err| format!("新建文件失败：{err}"))?;
+        }
+        Ok(WorkspaceMutationDto {
+            workspace: workspace_to_dto(&root),
+            path: Some(path.display().to_string()),
+        })
+    })
+    .await
+    .map_err(|err| format!("新建任务失败：{err}"))?
+}
+
+#[tauri::command]
+async fn rename_workspace_entry(
+    request: WorkspaceRenameRequest,
+) -> Result<WorkspaceMutationDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(request.root);
+        let path = workspace_existing_path(&root, &PathBuf::from(request.path))?;
+        ensure_not_workspace_root(&root, &path, "不能重命名工作区根目录")?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("无法取得父目录：{}", path.display()))?;
+        let name = sanitize_workspace_entry_name(&request.name)?;
+        let next_path = parent.join(name);
+        ensure_new_workspace_path(&root, &next_path)?;
+        fs::rename(&path, &next_path).map_err(|err| format!("重命名失败：{err}"))?;
+        Ok(WorkspaceMutationDto {
+            workspace: workspace_to_dto(&root),
+            path: Some(next_path.display().to_string()),
+        })
+    })
+    .await
+    .map_err(|err| format!("重命名任务失败：{err}"))?
+}
+
+#[tauri::command]
+async fn delete_workspace_entry(
+    request: WorkspacePathRequest,
+) -> Result<WorkspaceMutationDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(request.root);
+        let path = workspace_existing_path(&root, &PathBuf::from(request.path))?;
+        ensure_not_workspace_root(&root, &path, "不能删除工作区根目录")?;
+        let metadata = fs::metadata(&path).map_err(|err| format!("读取文件信息失败：{err}"))?;
+        if metadata.is_dir() {
+            fs::remove_dir_all(&path).map_err(|err| format!("删除文件夹失败：{err}"))?;
+        } else {
+            fs::remove_file(&path).map_err(|err| format!("删除文件失败：{err}"))?;
+        }
+        Ok(WorkspaceMutationDto {
+            workspace: workspace_to_dto(&root),
+            path: None,
+        })
+    })
+    .await
+    .map_err(|err| format!("删除任务失败：{err}"))?
+}
+
+#[tauri::command]
+async fn reveal_workspace_entry(request: WorkspacePathRequest) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(request.root);
+        let path = workspace_existing_path(&root, &PathBuf::from(request.path))?;
+        let metadata = fs::metadata(&path).map_err(|err| format!("读取文件信息失败：{err}"))?;
+        let mut command = Command::new("explorer.exe");
+        if metadata.is_dir() {
+            command.arg(&path);
+        } else {
+            command.arg(format!("/select,{}", path.display()));
+        }
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("打开资源管理器失败：{err}"))
+    })
+    .await
+    .map_err(|err| format!("打开资源管理器任务失败：{err}"))?
 }
 
 #[tauri::command]
@@ -347,23 +620,7 @@ async fn apply_workspace_replace(
 
 #[tauri::command]
 fn supported_languages() -> Vec<&'static str> {
-    vec![
-        "plaintext",
-        "markdown",
-        "toml",
-        "json",
-        "yaml",
-        "sql",
-        "powershell",
-        "javascript",
-        "typescript",
-        "python",
-        "xml",
-        "html",
-        "css",
-        "java",
-        "rust",
-    ]
+    SUPPORTED_LANGUAGES.to_vec()
 }
 
 #[tauri::command]
@@ -466,6 +723,73 @@ fn collect_tree_items(root: &Path, depth: usize, out: &mut Vec<TreeItemDto>) {
             collect_tree_items(&path, depth + 1, out);
         }
     }
+}
+
+fn workspace_existing_path(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|err| format!("读取工作区失败：{}：{err}", root.display()))?;
+    let path_canonical = path
+        .canonicalize()
+        .map_err(|err| format!("读取目标失败：{}：{err}", path.display()))?;
+    if !path_canonical.starts_with(&root_canonical) {
+        return Err(format!("目标不在工作区内：{}", path.display()));
+    }
+    Ok(path_canonical)
+}
+
+fn ensure_new_workspace_path(root: &Path, path: &Path) -> Result<(), String> {
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|err| format!("读取工作区失败：{}：{err}", root.display()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("无法取得父目录：{}", path.display()))?;
+    let parent_canonical = parent
+        .canonicalize()
+        .map_err(|err| format!("读取父目录失败：{}：{err}", parent.display()))?;
+    if !parent_canonical.starts_with(&root_canonical) {
+        return Err(format!("目标不在工作区内：{}", path.display()));
+    }
+    if path.exists() {
+        return Err(format!("目标已存在：{}", path.display()));
+    }
+    Ok(())
+}
+
+fn ensure_not_workspace_root(root: &Path, path: &Path, message: &str) -> Result<(), String> {
+    let root_canonical = root
+        .canonicalize()
+        .map_err(|err| format!("读取工作区失败：{}：{err}", root.display()))?;
+    let path_canonical = path
+        .canonicalize()
+        .map_err(|err| format!("读取目标失败：{}：{err}", path.display()))?;
+    if root_canonical == path_canonical {
+        return Err(message.to_owned());
+    }
+    Ok(())
+}
+
+fn sanitize_workspace_entry_name(value: &str) -> Result<String, String> {
+    let name = value.trim();
+    if name.is_empty() {
+        return Err("名称不能为空".to_owned());
+    }
+    if name == "." || name == ".." {
+        return Err("名称不能是 . 或 ..".to_owned());
+    }
+    if name.ends_with([' ', '.']) {
+        return Err("名称不能以空格或点结尾".to_owned());
+    }
+    if name.chars().any(|ch| {
+        matches!(
+            ch,
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'
+        )
+    }) {
+        return Err("名称包含 Windows 不支持的字符".to_owned());
+    }
+    Ok(name.to_owned())
 }
 
 fn search_report_to_dto(report: DirectorySearchReport) -> SearchReportDto {
@@ -594,67 +918,120 @@ fn should_skip_tree_entry(name: &str) -> bool {
 }
 
 fn is_text_like(path: &Path) -> bool {
+    if language_from_file_name(path).is_some() {
+        return true;
+    }
+
     path.extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| {
-            matches!(
-                ext.to_ascii_lowercase().as_str(),
-                "txt"
-                    | "md"
-                    | "markdown"
-                    | "rs"
-                    | "toml"
-                    | "json"
-                    | "yaml"
-                    | "yml"
-                    | "sql"
-                    | "xml"
-                    | "html"
-                    | "css"
-                    | "js"
-                    | "ts"
-                    | "tsx"
-                    | "jsx"
-                    | "py"
-                    | "java"
-                    | "kt"
-                    | "ps1"
-                    | "log"
-                    | "csv"
-                    | "ini"
-                    | "properties"
-            )
-        })
+        .map(|ext| language_from_extension(&ext.to_ascii_lowercase()).is_some())
         .unwrap_or(true)
 }
 
 fn language_from_path(path: Option<&Path>) -> String {
-    let Some(ext) = path
-        .and_then(Path::extension)
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_ascii_lowercase())
-    else {
+    let Some(path) = path else {
         return "plaintext".to_owned();
     };
 
-    match ext.as_str() {
-        "md" | "markdown" => "markdown",
-        "toml" => "toml",
-        "json" => "json",
-        "yaml" | "yml" => "yaml",
-        "sql" => "sql",
-        "ps1" | "psm1" => "powershell",
-        "js" | "jsx" => "javascript",
-        "ts" | "tsx" => "typescript",
-        "py" => "python",
-        "xml" => "xml",
-        "html" | "xhtml" => "html",
-        "css" => "css",
-        "java" => "java",
-        "rs" => "rust",
-        _ => "plaintext",
+    if let Some(language) = language_from_file_name(path) {
+        return language.to_owned();
     }
-    .to_owned()
+
+    path.extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .and_then(|ext| language_from_extension(&ext))
+        .unwrap_or("plaintext")
+        .to_owned()
+}
+
+fn language_from_file_name(path: &Path) -> Option<&'static str> {
+    let name = path.file_name()?.to_string_lossy().to_ascii_lowercase();
+    match name.as_str() {
+        "dockerfile" | "containerfile" => Some("dockerfile"),
+        "makefile" | "gnumakefile" => Some("shell"),
+        ".babelrc" | ".bowerrc" | ".eslintrc" | ".jscsrc" | ".jshintrc" | ".prettierrc" => {
+            Some("json")
+        }
+        ".env" | ".env.local" | ".gitignore" | ".dockerignore" | ".npmrc" => Some("plaintext"),
+        _ => None,
+    }
+}
+
+fn language_from_extension(ext: &str) -> Option<&'static str> {
+    match ext {
+        "txt" | "text" | "log" | "csv" | "tsv" => Some("plaintext"),
+        "md" | "markdown" | "rmd" => Some("markdown"),
+        "mdx" => Some("mdx"),
+        "json" | "jsonc" | "har" => Some("json"),
+        "toml" => Some("toml"),
+        "yaml" | "yml" => Some("yaml"),
+        "sql" => Some("sql"),
+        "mysql" => Some("mysql"),
+        "pgsql" => Some("pgsql"),
+        "ps1" | "psm1" | "psd1" => Some("powershell"),
+        "js" | "jsx" | "mjs" | "cjs" => Some("javascript"),
+        "ts" | "tsx" | "mts" | "cts" => Some("typescript"),
+        "py" | "pyw" | "pyi" => Some("python"),
+        "xml" | "xsd" | "xsl" | "svg" => Some("xml"),
+        "html" | "htm" | "xhtml" => Some("html"),
+        "css" => Some("css"),
+        "scss" => Some("scss"),
+        "less" => Some("less"),
+        "java" => Some("java"),
+        "rs" => Some("rust"),
+        "go" => Some("go"),
+        "c" | "h" | "cc" | "cpp" | "cxx" | "hh" | "hpp" | "hxx" => Some("cpp"),
+        "cs" | "csx" => Some("csharp"),
+        "php" | "phtml" => Some("php"),
+        "rb" | "rake" | "gemspec" => Some("ruby"),
+        "sh" | "bash" | "zsh" | "fish" | "ksh" => Some("shell"),
+        "bat" | "cmd" => Some("bat"),
+        "ini" | "cfg" | "conf" | "editorconfig" | "properties" => Some("ini"),
+        "kt" | "kts" => Some("kotlin"),
+        "swift" => Some("swift"),
+        "scala" | "sc" => Some("scala"),
+        "dart" => Some("dart"),
+        "lua" => Some("lua"),
+        "pl" | "pm" => Some("perl"),
+        "r" => Some("r"),
+        "ex" | "exs" => Some("elixir"),
+        "fs" | "fsi" | "fsx" => Some("fsharp"),
+        "clj" | "cljs" | "cljc" | "edn" => Some("clojure"),
+        "coffee" => Some("coffee"),
+        "graphql" | "gql" => Some("graphql"),
+        "tf" | "tfvars" | "hcl" => Some("hcl"),
+        "proto" => Some("protobuf"),
+        "sol" => Some("solidity"),
+        "sv" | "svh" => Some("systemverilog"),
+        "vb" | "vbs" => Some("vb"),
+        "m" | "mm" => Some("objective-c"),
+        "pas" | "pp" => Some("pascal"),
+        "pug" | "jade" => Some("pug"),
+        "hbs" | "handlebars" => Some("handlebars"),
+        "twig" => Some("twig"),
+        "liquid" => Some("liquid"),
+        "ftl" => Some("freemarker2"),
+        "cshtml" | "razor" => Some("razor"),
+        "redis" => Some("redis"),
+        "rst" => Some("restructuredtext"),
+        "rq" | "sparql" => Some("sparql"),
+        "tcl" => Some("tcl"),
+        "wgsl" => Some("wgsl"),
+        "bicep" => Some("bicep"),
+        "apex" | "cls" | "trigger" => Some("apex"),
+        "abap" => Some("abap"),
+        "azcli" => Some("azcli"),
+        "cypher" | "cql" => Some("cypher"),
+        "qs" => Some("qsharp"),
+        "pq" => Some("powerquery"),
+        "tsp" => Some("typespec"),
+        "ecl" => Some("ecl"),
+        "jl" => Some("julia"),
+        "asm" | "s" | "mips" => Some("mips"),
+        "mligo" | "ligo" => Some("cameligo"),
+        _ => None,
+    }
 }
 
 fn parse_encoding(label: &str) -> EncodingKind {

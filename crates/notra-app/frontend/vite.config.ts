@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  base: "./",
   clearScreen: false,
   server: {
     host: "127.0.0.1",
@@ -14,8 +15,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes("monaco-editor/esm/vs/basic-languages")) return "monaco-languages";
-          if (id.includes("monaco-editor")) return "monaco-core";
+          if (id.includes("monaco-editor")) return "monaco";
           if (id.includes("node_modules")) return "vendor";
         },
       },

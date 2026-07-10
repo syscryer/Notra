@@ -6,82 +6,56 @@
     <title>Notra</title>
   </head>
   <body>
-    <svg class="icon-sprite" aria-hidden="true">
-      <symbol id="icon-files" viewBox="0 0 24 24">
-        <path d="M7 3.8h7.2l3.8 3.8v12.6H7z" />
-        <path d="M14 3.8v4h4" />
-        <path d="M4 7.8h3v12.4h10" />
-      </symbol>
-      <symbol id="icon-search" viewBox="0 0 24 24">
-        <circle cx="10.8" cy="10.8" r="6.2" />
-        <path d="m15.4 15.4 4.4 4.4" />
-      </symbol>
-      <symbol id="icon-panel" viewBox="0 0 24 24">
-        <rect x="4" y="5" width="16" height="14" rx="2" />
-        <path d="M4 14h16" />
-      </symbol>
-      <symbol id="icon-moon" viewBox="0 0 24 24">
-        <path d="M18.2 15.7A7.5 7.5 0 0 1 8.3 5.8 8 8 0 1 0 18.2 15.7z" />
-      </symbol>
-      <symbol id="icon-plus" viewBox="0 0 24 24">
-        <path d="M12 5v14" />
-        <path d="M5 12h14" />
-      </symbol>
-      <symbol id="icon-folder" viewBox="0 0 24 24">
-        <path d="M4 6.5h6l2 2h8v9.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
-      </symbol>
-      <symbol id="icon-save" viewBox="0 0 24 24">
-        <path d="M5 4h12l2 2v14H5z" />
-        <path d="M8 4v6h7V4" />
-        <path d="M8 16h8" />
-      </symbol>
-      <symbol id="icon-markdown" viewBox="0 0 24 24">
-        <rect x="3.5" y="6" width="17" height="12" rx="2" />
-        <path d="M7 15v-6l2.2 3 2.3-3v6" />
-        <path d="M15.5 9v6" />
-        <path d="m13.5 13 2 2 2-2" />
-      </symbol>
-    </svg>
     <main id="app">
-      <header class="titlebar">
+      <header class="titlebar" id="windowTitlebar">
         <section class="brand">
           <div class="brand-mark">N</div>
-          <div class="brand-copy">
-            <strong>Notra</strong>
-            <span id="activePath">未保存</span>
-          </div>
+          <strong>Notra</strong>
         </section>
+        <div class="title-drag-zone"></div>
         <section class="title-actions">
-          <span class="pill" id="dirtyCount">0 未保存</span>
-          <span class="pill ok">索引就绪</span>
-          <span class="pill" id="workspaceState">未打开目录</span>
-          <button class="mini-button" id="themeButton">深色</button>
+          <button class="title-button" id="themeButton" aria-label="切换主题" title="切换主题">
+            <span class="icon-slot" data-icon="Moon"></span><span data-label>深色</span>
+          </button>
+          <button class="title-button icon-only" id="settingsButton" aria-label="设置" title="设置">
+            <span class="icon-slot" data-icon="Settings"></span>
+          </button>
+          <div class="window-controls" aria-label="窗口控制">
+            <button class="window-button" id="windowMinimize" aria-label="最小化" title="最小化">
+              <span class="icon-slot" data-icon="Minus"></span>
+            </button>
+            <button class="window-button" id="windowMaximize" aria-label="最大化" title="最大化">
+              <span class="icon-slot" data-icon="Maximize2"></span>
+            </button>
+            <button class="window-button danger" id="windowClose" aria-label="关闭" title="关闭">
+              <span class="icon-slot" data-icon="X"></span>
+            </button>
+          </div>
         </section>
       </header>
 
       <nav class="toolbar">
         <div class="tool-group">
-          <button class="tool-button" id="newButton"><svg><use href="#icon-plus"></use></svg><span>新建</span></button>
-          <button class="tool-button" id="openButton"><svg><use href="#icon-folder"></use></svg><span>打开</span></button>
-          <button class="tool-button" id="recentButton">最近</button>
-          <button class="tool-button" id="workspaceButton"><svg><use href="#icon-files"></use></svg><span>打开目录</span></button>
+          <button class="tool-button" id="singleModeButton" aria-label="单文件模式" title="单文件模式"><span class="icon-slot" data-icon="File"></span><span data-label>单文件模式</span></button>
+          <button class="tool-button" id="workspaceButton" aria-label="文件夹模式" title="文件夹模式"><span class="icon-slot" data-icon="FolderTree"></span><span data-label>文件夹模式</span></button>
           <span class="tool-divider"></span>
-          <button class="tool-button primary" id="saveButton"><svg><use href="#icon-save"></use></svg><span>保存</span></button>
-          <button class="tool-button" id="saveAsButton">另存为</button>
-          <button class="tool-button" id="saveAllButton">保存全部</button>
+          <button class="tool-button" id="newButton" aria-label="新建" title="新建"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
+          <button class="tool-button" id="openButton" aria-label="打开文件" title="打开文件"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
+          <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近文件" title="最近文件"><span class="icon-slot" data-icon="History"></span><span data-label>最近文件</span></button>
           <span class="tool-divider"></span>
-          <button class="tool-button" id="undoButton">撤销</button>
-          <button class="tool-button" id="redoButton">重做</button>
-          <button class="tool-button" id="markdownPreviewButton"><svg><use href="#icon-markdown"></use></svg><span>MD 预览</span></button>
+          <button class="tool-button primary" id="saveButton" aria-label="保存" title="保存"><span class="icon-slot" data-icon="Save"></span><span data-label>保存</span></button>
+          <button class="tool-button" id="saveAsButton" aria-label="另存为" title="另存为"><span class="icon-slot" data-icon="SavePlus"></span><span data-label>另存为</span></button>
+          <button class="tool-button" id="saveAllButton" aria-label="保存全部" title="保存全部"><span class="icon-slot" data-icon="SaveAll"></span><span data-label>保存全部</span></button>
+          <span class="tool-divider"></span>
+          <button class="tool-button" id="undoButton" aria-label="撤销" title="撤销"><span class="icon-slot" data-icon="Undo2"></span><span data-label>撤销</span></button>
+          <button class="tool-button" id="redoButton" aria-label="重做" title="重做"><span class="icon-slot" data-icon="Redo2"></span><span data-label>重做</span></button>
+          <button class="tool-button" id="markdownPreviewButton" aria-label="Markdown 分屏预览" title="Markdown 分屏预览"><span class="icon-slot" data-icon="FileText"></span><span data-label>Markdown 分屏预览</span></button>
         </div>
 
-        <button class="command-box" id="commandBox">命令搜索 / 文件名 / 符号</button>
-
         <div class="tool-group right">
-          <button class="tool-button" id="languageButton">语言: Plain Text</button>
-          <button class="tool-button" id="encodingButton">UTF-8</button>
-          <button class="tool-button" id="lineEndingButton">LF</button>
-          <span class="readonly-pill" id="readonlyState">可编辑</span>
+          <button class="tool-button meta" id="languageButton" data-menu-trigger aria-label="语言 Plain Text" title="语言 Plain Text"><span class="icon-slot" data-icon="Braces"></span><span data-label>语言: Plain Text</span><span class="icon-slot chevron" data-icon="ChevronDown"></span></button>
+          <button class="tool-button meta" id="encodingButton" data-menu-trigger aria-label="编码 UTF-8" title="编码 UTF-8"><span class="icon-slot" data-icon="Binary"></span><span data-label>UTF-8</span><span class="icon-slot chevron" data-icon="ChevronDown"></span></button>
+          <button class="tool-button meta" id="lineEndingButton" data-menu-trigger aria-label="行尾 LF" title="行尾 LF"><span class="icon-slot" data-icon="Pilcrow"></span><span data-label>LF</span><span class="icon-slot chevron" data-icon="ChevronDown"></span></button>
         </div>
       </nav>
 
@@ -90,26 +64,23 @@
       <section class="workspace" id="workspace">
         <aside class="activity-rail" id="activityRail">
           <button class="rail-button active" id="directoryToggle" aria-label="目录" title="目录">
-            <svg><use href="#icon-files"></use></svg>
+            <span class="icon-slot" data-icon="Files"></span>
           </button>
           <button class="rail-button" id="findRailButton" aria-label="查找" title="查找">
-            <svg><use href="#icon-search"></use></svg>
+            <span class="icon-slot" data-icon="Search"></span>
           </button>
           <button class="rail-button" id="bottomRailButton" aria-label="输出面板" title="输出面板">
-            <svg><use href="#icon-panel"></use></svg>
+            <span class="icon-slot" data-icon="PanelBottom"></span>
           </button>
           <div class="rail-spacer"></div>
-          <button class="rail-button" id="themeRailButton" aria-label="切换主题" title="切换主题">
-            <svg><use href="#icon-moon"></use></svg>
-          </button>
         </aside>
 
         <aside class="explorer" id="explorer">
           <header class="explorer-head">
             <strong id="workspaceTitle">工作目录</strong>
             <div class="explorer-actions">
-              <button class="ghost-button" id="refreshDirectoryButton">刷新</button>
-              <button class="ghost-button" id="closeDirectoryButton">关闭</button>
+              <button class="ghost-button icon-only" id="refreshDirectoryButton" aria-label="刷新目录" title="刷新目录"><span class="icon-slot" data-icon="RefreshCw"></span><span data-label>刷新目录</span></button>
+              <button class="ghost-button icon-only" id="closeDirectoryButton" aria-label="收起目录" title="收起目录"><span class="icon-slot" data-icon="PanelLeftClose"></span><span data-label>收起目录</span></button>
             </div>
           </header>
           <div class="explorer-body" id="tree"></div>
@@ -128,6 +99,9 @@
           <strong>语言</strong>
           <span>选择当前文档语法</span>
         </header>
+        <div class="menu-search">
+          <input id="languageSearchInput" placeholder="筛选语言或扩展名" />
+        </div>
         <div class="menu-list" id="languageList"></div>
       </section>
 
@@ -158,6 +132,349 @@
         <div class="menu-list" id="lineEndingList"></div>
       </section>
 
+      <section class="settings-page hidden" id="settingsPage" aria-label="设置">
+        <aside class="settings-sidebar">
+          <header class="settings-sidebar-head">
+            <strong>设置</strong>
+            <button class="settings-close" id="settingsCloseButton" aria-label="关闭设置" title="关闭设置">
+              <span class="icon-slot" data-icon="X"></span>
+            </button>
+          </header>
+          <nav class="settings-nav" aria-label="设置分类">
+            <button class="settings-nav-item active" data-settings-section="appearance">
+              <span class="icon-slot" data-icon="Sun"></span>
+              <strong>外观</strong>
+            </button>
+            <button class="settings-nav-item" data-settings-section="editor">
+              <span class="icon-slot" data-icon="Type"></span>
+              <strong>编辑器</strong>
+            </button>
+            <button class="settings-nav-item" data-settings-section="workspace">
+              <span class="icon-slot" data-icon="FolderTree"></span>
+              <strong>工作区</strong>
+            </button>
+            <button class="settings-nav-item" data-settings-section="search">
+              <span class="icon-slot" data-icon="Search"></span>
+              <strong>查找</strong>
+            </button>
+            <button class="settings-nav-item" data-settings-section="about">
+              <span class="icon-slot" data-icon="Info"></span>
+              <strong>关于</strong>
+            </button>
+          </nav>
+          <footer class="settings-product">
+            <div class="settings-product-mark">N</div>
+            <div>
+              <strong>Notra</strong>
+              <span>v0.1.0</span>
+            </div>
+          </footer>
+        </aside>
+
+        <section class="settings-content">
+          <section class="settings-panel active" data-settings-panel="appearance">
+            <header class="settings-section-head">
+              <strong>主题</strong>
+              <span>浅色优先，深色作为快速切换</span>
+            </header>
+            <div class="theme-grid">
+              <button class="theme-card" id="settingsThemeLight">
+                <span class="theme-swatches">
+                  <i></i><i></i><i></i>
+                </span>
+                <strong>晨光</strong>
+                <span>Light · 明亮清爽</span>
+                <em>当前</em>
+              </button>
+              <button class="theme-card" id="settingsThemeDark">
+                <span class="theme-swatches dark-swatch">
+                  <i></i><i></i><i></i>
+                </span>
+                <strong>夜航</strong>
+                <span>Dark · 低亮编辑</span>
+                <em>当前</em>
+              </button>
+            </div>
+
+            <header class="settings-section-head compact">
+              <strong>字体与显示</strong>
+              <span>分别控制应用壳和编辑区的阅读手感</span>
+            </header>
+            <div class="settings-list">
+              <div class="settings-row font-row">
+                <span class="settings-row-icon icon-slot" data-icon="Type"></span>
+                <div>
+                  <strong>界面字体</strong>
+                  <span>标题栏、侧栏、按钮和设置页</span>
+                </div>
+                <div class="font-control" data-font-target="shell">
+                  <div class="font-dropdown">
+                    <button class="font-select-trigger" id="settingsShellFontModeButton" type="button" data-font-dropdown-trigger="settingsShellFontModeMenu" aria-haspopup="menu" aria-expanded="false">
+                      <span id="settingsShellFontModeLabel">预设字体</span>
+                      <span class="icon-slot font-select-chevron" data-icon="ChevronDown"></span>
+                    </button>
+                    <div class="font-dropdown-menu hidden" id="settingsShellFontModeMenu" role="menu">
+                      <button type="button" data-value="preset" role="menuitem"><span>预设字体</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="custom" role="menuitem"><span>手动输入</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                    </div>
+                  </div>
+                  <div class="font-dropdown" id="settingsShellFontPresetWrap">
+                    <button class="font-select-trigger" id="settingsShellFontPresetButton" type="button" data-font-dropdown-trigger="settingsShellFontPresetMenu" aria-haspopup="menu" aria-expanded="false">
+                      <span id="settingsShellFontPresetLabel">系统默认</span>
+                      <span class="icon-slot font-select-chevron" data-icon="ChevronDown"></span>
+                    </button>
+                    <div class="font-dropdown-menu hidden" id="settingsShellFontPresetMenu" role="menu">
+                      <button type="button" data-value="system" role="menuitem"><span>系统默认</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="segoe" role="menuitem"><span>Segoe UI Variable</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="yahei" role="menuitem"><span>微软雅黑</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="dengxian" role="menuitem"><span>等线</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="sourceHanSans" role="menuitem"><span>思源黑体</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="misans" role="menuitem"><span>MiSans</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                    </div>
+                  </div>
+                  <input class="font-input" id="settingsShellFontCustom" aria-label="自定义界面字体" spellcheck="false" placeholder='自定义，例如 "MiSans", "Microsoft YaHei UI", sans-serif' />
+                </div>
+              </div>
+              <div class="settings-row font-row">
+                <span class="settings-row-icon icon-slot" data-icon="Braces"></span>
+                <div>
+                  <strong>编辑器字体</strong>
+                  <span>Monaco 文本区和代码提示</span>
+                </div>
+                <div class="font-control" data-font-target="editor">
+                  <div class="font-dropdown">
+                    <button class="font-select-trigger" id="settingsEditorFontModeButton" type="button" data-font-dropdown-trigger="settingsEditorFontModeMenu" aria-haspopup="menu" aria-expanded="false">
+                      <span id="settingsEditorFontModeLabel">预设字体</span>
+                      <span class="icon-slot font-select-chevron" data-icon="ChevronDown"></span>
+                    </button>
+                    <div class="font-dropdown-menu hidden" id="settingsEditorFontModeMenu" role="menu">
+                      <button type="button" data-value="preset" role="menuitem"><span>预设字体</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="custom" role="menuitem"><span>手动输入</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                    </div>
+                  </div>
+                  <div class="font-dropdown" id="settingsEditorFontPresetWrap">
+                    <button class="font-select-trigger" id="settingsEditorFontPresetButton" type="button" data-font-dropdown-trigger="settingsEditorFontPresetMenu" aria-haspopup="menu" aria-expanded="false">
+                      <span id="settingsEditorFontPresetLabel">Cascadia</span>
+                      <span class="icon-slot font-select-chevron" data-icon="ChevronDown"></span>
+                    </button>
+                    <div class="font-dropdown-menu hidden" id="settingsEditorFontPresetMenu" role="menu">
+                      <button type="button" data-value="cascadia" role="menuitem"><span>Cascadia</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="jetbrains" role="menuitem"><span>JetBrains</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="consolas" role="menuitem"><span>Consolas</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="firaCode" role="menuitem"><span>Fira Code</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                      <button type="button" data-value="sourceCodePro" role="menuitem"><span>Source Code Pro</span><span class="icon-slot font-option-check" data-icon="Check"></span></button>
+                    </div>
+                  </div>
+                  <input class="font-input" id="settingsEditorFontCustom" aria-label="自定义编辑器字体" spellcheck="false" placeholder='自定义，例如 "JetBrains Mono", "Cascadia Code", Consolas, monospace' />
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Type"></span>
+                <div>
+                  <strong>界面字号</strong>
+                  <span>应用壳主要文字大小</span>
+                </div>
+                <div class="stepper">
+                  <button id="settingsShellFontMinus" aria-label="缩小界面字号" title="缩小界面字号"><span class="icon-slot" data-icon="Minus"></span></button>
+                  <strong id="settingsShellFontValue">14 px</strong>
+                  <button id="settingsShellFontPlus" aria-label="放大界面字号" title="放大界面字号"><span class="icon-slot" data-icon="ZoomIn"></span></button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Type"></span>
+                <div>
+                  <strong>编辑器字号</strong>
+                  <span>Monaco 编辑区文字大小</span>
+                </div>
+                <div class="stepper">
+                  <button id="settingsFontMinus" aria-label="缩小字号" title="缩小字号"><span class="icon-slot" data-icon="Minus"></span></button>
+                  <strong id="settingsFontValue">14 px</strong>
+                  <button id="settingsFontPlus" aria-label="放大字号" title="放大字号"><span class="icon-slot" data-icon="ZoomIn"></span></button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="ListRestart"></span>
+                <div>
+                  <strong>视图状态</strong>
+                  <span>恢复默认显示设置</span>
+                </div>
+                <button class="settings-action" id="settingsResetViewButton">重置</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="editor">
+            <header class="settings-section-head">
+              <strong>编辑器</strong>
+              <span>控制文本显示和辅助信息</span>
+            </header>
+            <div class="settings-list">
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="WrapText"></span>
+                <div>
+                  <strong>自动换行</strong>
+                  <span>长行在视口内折行</span>
+                </div>
+                <div class="seg-control" id="settingsWordWrapControl">
+                  <button data-value="off">关闭</button>
+                  <button data-value="on">开启</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Map"></span>
+                <div>
+                  <strong>缩略图</strong>
+                  <span>右侧代码地图</span>
+                </div>
+                <div class="seg-control" id="settingsMinimapControl">
+                  <button data-value="off">关闭</button>
+                  <button data-value="on">开启</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Pilcrow"></span>
+                <div>
+                  <strong>空白符</strong>
+                  <span>显示空格、制表符和换行</span>
+                </div>
+                <div class="seg-control wide" id="settingsWhitespaceControl">
+                  <button data-value="none">关闭</button>
+                  <button data-value="selection">选区</button>
+                  <button data-value="all">全部</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="workspace">
+            <header class="settings-section-head">
+              <strong>工作区</strong>
+              <span>切换 Notra 的主要工作形态</span>
+            </header>
+            <div class="settings-list">
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="File"></span>
+                <div>
+                  <strong>文件模式</strong>
+                  <span>单文件或目录浏览</span>
+                </div>
+                <div class="seg-control wide" id="settingsModeControl">
+                  <button data-value="single">单文件</button>
+                  <button data-value="workspace">文件夹</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="PanelBottom"></span>
+                <div>
+                  <strong>底部面板</strong>
+                  <span>当前文件查找结果和日志</span>
+                </div>
+                <div class="seg-control" id="settingsBottomControl">
+                  <button data-value="off">隐藏</button>
+                  <button data-value="on">显示</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="FileText"></span>
+                <div>
+                  <strong>Markdown 分屏预览</strong>
+                  <span>Markdown 和 MDX 文档自动显示右侧预览</span>
+                </div>
+                <div class="seg-control" id="settingsMarkdownControl">
+                  <button data-value="off">关闭</button>
+                  <button data-value="on">开启</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Command"></span>
+                <div>
+                  <strong>命令面板</strong>
+                  <span>打开命令和快速跳转</span>
+                </div>
+                <button class="settings-action" id="settingsCommandButton">打开</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="search">
+            <header class="settings-section-head">
+              <strong>查找</strong>
+              <span>当前文档内查找、替换和标记</span>
+            </header>
+            <div class="settings-list">
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Search"></span>
+                <div>
+                  <strong>查找面板</strong>
+                  <span>默认只在文档中高亮，按需展开结果</span>
+                </div>
+                <button class="settings-action" id="settingsOpenFindButton">打开</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="about">
+            <header class="settings-section-head">
+              <strong>关于</strong>
+              <span>当前应用和编辑内核</span>
+            </header>
+            <div class="about-block">
+              <div class="about-mark">N</div>
+              <div>
+                <strong>Notra</strong>
+                <span>Tauri + Monaco editor</span>
+              </div>
+            </div>
+            <div class="settings-list">
+              <div class="settings-row static">
+                <span class="settings-row-icon icon-slot" data-icon="FileText"></span>
+                <div>
+                  <strong>版本</strong>
+                  <span>0.1.0</span>
+                </div>
+              </div>
+              <div class="settings-row static">
+                <span class="settings-row-icon icon-slot" data-icon="Braces"></span>
+                <div>
+                  <strong>语法高亮</strong>
+                  <span>Monaco basic languages</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </section>
+
+      <section class="popover tab-menu hidden" id="tabMenu" role="menu" aria-label="标签菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="tabSaveButton" role="menuitem"><span class="icon-slot" data-icon="Save"></span><strong>保存</strong><small>Ctrl+S</small></button>
+          <button class="menu-row" id="tabSaveAsButton" role="menuitem"><span class="icon-slot" data-icon="SavePlus"></span><strong>另存为</strong><small></small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="tabCopyPathButton" role="menuitem"><span class="icon-slot" data-icon="Copy"></span><strong>复制路径</strong><small></small></button>
+          <button class="menu-row" id="tabRevealButton" role="menuitem"><span class="icon-slot" data-icon="ExternalLink"></span><strong>在资源管理器中显示</strong><small></small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="tabCloseButton" role="menuitem"><span class="icon-slot" data-icon="X"></span><strong>关闭</strong><small>Ctrl+W</small></button>
+          <button class="menu-row" id="tabCloseOthersButton" role="menuitem"><span class="icon-slot" data-icon="Files"></span><strong>关闭其他</strong><small></small></button>
+          <button class="menu-row" id="tabCloseRightButton" role="menuitem"><span class="icon-slot" data-icon="PanelLeftClose"></span><strong>关闭右侧</strong><small></small></button>
+          <button class="menu-row" id="tabCloseSavedButton" role="menuitem"><span class="icon-slot" data-icon="SaveAll"></span><strong>关闭已保存</strong><small></small></button>
+        </div>
+      </section>
+
+      <section class="popover tree-menu hidden" id="treeMenu" role="menu" aria-label="文件树菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="treeOpenButton" role="menuitem"><span class="icon-slot" data-icon="FileText"></span><strong>打开</strong><small></small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="treeNewFileButton" role="menuitem"><span class="icon-slot" data-icon="FilePlus2"></span><strong>新建文件</strong><small></small></button>
+          <button class="menu-row" id="treeNewFolderButton" role="menuitem"><span class="icon-slot" data-icon="FolderPlus"></span><strong>新建文件夹</strong><small></small></button>
+          <button class="menu-row" id="treeRenameButton" role="menuitem"><span class="icon-slot" data-icon="Edit3"></span><strong>重命名</strong><small>F2</small></button>
+          <button class="menu-row danger" id="treeDeleteButton" role="menuitem"><span class="icon-slot" data-icon="Trash2"></span><strong>删除</strong><small>Del</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="treeCopyPathButton" role="menuitem"><span class="icon-slot" data-icon="Copy"></span><strong>复制路径</strong><small></small></button>
+          <button class="menu-row" id="treeRevealButton" role="menuitem"><span class="icon-slot" data-icon="ExternalLink"></span><strong>在资源管理器中显示</strong><small></small></button>
+          <button class="menu-row" id="treeRefreshButton" role="menuitem"><span class="icon-slot" data-icon="RefreshCw"></span><strong>刷新目录</strong><small></small></button>
+        </div>
+      </section>
+
       <section class="command-popover hidden" id="commandPalette">
         <header class="popover-head">
           <strong>命令</strong>
@@ -168,58 +485,47 @@
       </section>
 
       <section class="find-popover hidden" id="findPopover">
-        <div class="segmented">
-          <button class="seg active">查找</button>
-          <button class="seg">替换</button>
-          <button class="seg">文件查找</button>
-          <button class="seg">标记</button>
+        <div class="segmented find-drag-handle" id="findDragHandle" title="拖动查找框">
+          <button class="seg active" data-find-view="find">查找</button>
+          <button class="seg" data-find-view="replace">替换</button>
+          <button class="seg" data-find-view="mark">标记</button>
         </div>
         <div class="find-body">
           <div class="field-stack">
             <label><span>查找目标</span><input id="findInput" list="findHistoryList" /></label>
-            <label><span>替换为</span><input id="replaceInput" list="replaceHistoryList" /></label>
-            <label><span>目录</span><input id="directoryInput" /></label>
-            <label><span>文件过滤</span><input id="fileGlobInput" value="*.*" /></label>
-            <label><span>跳过目录</span><input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" /></label>
-            <label><span>搜索模式</span>
-              <select id="searchModeInput">
-                <option value="literal">普通</option>
-                <option value="extended">扩展</option>
-                <option value="regex">正则</option>
-              </select>
-            </label>
-            <div class="checks">
-              <label><input type="checkbox" id="matchCaseInput" />匹配大小写</label>
+            <label><span>替换为</span><input id="replaceInput" list="replaceHistoryDataList" /></label>
+            <div class="checks find-flags">
+              <label><input type="checkbox" id="reverseSearchInput" />反向查找</label>
               <label><input type="checkbox" id="wholeWordInput" />全词匹配</label>
-              <label><input type="checkbox" id="recursiveInput" checked />递归子目录</label>
-              <label><input type="checkbox" id="includeHiddenInput" />包含隐藏项</label>
+              <label><input type="checkbox" id="matchCaseInput" />匹配大小写</label>
+              <label><input type="checkbox" id="wrapSearchInput" checked />循环查找</label>
+              <label><input type="checkbox" id="searchSelectionInput" />选取范围内</label>
             </div>
-            <div class="history-pane">
-              <div>
-                <header><span>查找历史</span><button id="favoriteSearchButton">收藏</button></header>
-                <div class="history-list" id="searchHistoryList"></div>
-              </div>
-              <div>
-                <header><span>搜索收藏</span><button id="clearFavoritesButton">清空</button></header>
-                <div class="history-list" id="searchFavoritesList"></div>
-              </div>
-              <div>
-                <header><span>替换历史</span><button id="clearHistoryButton">清空</button></header>
-                <div class="history-list" id="replaceHistoryList"></div>
-              </div>
-            </div>
+            <fieldset class="search-mode-field" id="searchModeInput">
+              <legend>查找模式</legend>
+              <label><input type="radio" name="searchMode" value="literal" checked />普通</label>
+              <label><input type="radio" name="searchMode" value="extended" />扩展</label>
+              <label><input type="radio" name="searchMode" value="regex" />正则表达式</label>
+            </fieldset>
             <datalist id="findHistoryList"></datalist>
             <datalist id="replaceHistoryDataList"></datalist>
+            <div class="hidden" aria-hidden="true">
+              <input id="directoryInput" />
+              <input id="fileGlobInput" value="*.*" />
+              <input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" />
+              <input type="checkbox" id="recursiveInput" checked />
+              <input type="checkbox" id="includeHiddenInput" />
+            </div>
           </div>
           <div class="action-stack">
-            <button class="primary" id="findNextButton">查找下一个</button>
-            <button id="findCurrentButton">在当前文件中查找</button>
-            <button id="findOpenButton">打开文档查找</button>
-            <button id="findWorkspaceButton">目录查找</button>
-            <button id="previewReplaceButton">替换预览</button>
-            <button id="replaceCurrentButton">替换当前文件</button>
-            <button id="replaceOpenButton">替换打开文档</button>
-            <button id="closeFindButton">取消</button>
+            <button class="primary" id="findNextButton"><span class="icon-slot" data-icon="ArrowDown"></span><span>查找下一个</span></button>
+            <button id="findPreviousButton"><span class="icon-slot" data-icon="ArrowUp"></span><span>查找上一个</span></button>
+            <button id="findCurrentButton"><span class="icon-slot" data-icon="FileSearch"></span><span>当前文件中查找</span></button>
+            <button id="replaceCurrentButton"><span class="icon-slot" data-icon="Replace"></span><span>替换当前</span></button>
+            <button id="replaceAllCurrentButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>全部替换</span></button>
+            <button id="markCurrentButton"><span class="icon-slot" data-icon="Highlighter"></span><span>标记当前</span></button>
+            <button id="clearMarksButton"><span class="icon-slot" data-icon="Eraser"></span><span>清除标记</span></button>
+            <button id="closeFindButton"><span class="icon-slot" data-icon="CircleX"></span><span>取消</span></button>
           </div>
         </div>
       </section>
@@ -228,16 +534,15 @@
         <header class="panel-head">
           <div class="panel-tabs">
             <button class="panel-tab active" data-panel="results">查找结果</button>
-            <button class="panel-tab" data-panel="preview">替换预览</button>
             <button class="panel-tab" data-panel="logs">日志</button>
           </div>
-          <button class="tool-button" id="collapseBottomButton">收起</button>
+          <button class="tool-button" id="collapseBottomButton" aria-label="收起底部面板" title="收起底部面板"><span class="icon-slot" data-icon="PanelBottomClose"></span><span data-label>收起底部面板</span></button>
         </header>
         <div class="panel-body" id="panelBody"></div>
       </section>
 
       <footer class="statusbar">
-        <div class="status-left" id="statusLeft"></div>
+        <div class="status-left" id="statusLeft" aria-live="polite"></div>
         <div class="status-right" id="statusRight"></div>
       </footer>
 
@@ -252,6 +557,39 @@
             <button class="tool-button" id="unsavedCancelButton">取消</button>
             <button class="tool-button" id="unsavedDiscardButton">不保存</button>
             <button class="tool-button primary" id="unsavedSaveButton">保存</button>
+          </footer>
+        </div>
+      </section>
+
+      <section class="modal-backdrop hidden" id="confirmDialog" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <div class="modal">
+          <header>
+            <strong id="confirmTitle">确认操作</strong>
+            <span id="confirmSubtitle">此操作需要确认</span>
+          </header>
+          <div class="modal-body" id="confirmBody"></div>
+          <footer>
+            <button class="tool-button" id="confirmCancelButton">取消</button>
+            <button class="tool-button primary" id="confirmOkButton">确认</button>
+          </footer>
+        </div>
+      </section>
+
+      <section class="modal-backdrop hidden" id="inputDialog" role="dialog" aria-modal="true" aria-labelledby="inputTitle">
+        <div class="modal">
+          <header>
+            <strong id="inputTitle">输入名称</strong>
+            <span id="inputSubtitle">请输入文件或文件夹名称</span>
+          </header>
+          <div class="modal-body">
+            <label class="prompt-field">
+              <span id="inputLabel">名称</span>
+              <input id="inputDialogInput" autocomplete="off" />
+            </label>
+          </div>
+          <footer>
+            <button class="tool-button" id="inputCancelButton">取消</button>
+            <button class="tool-button primary" id="inputOkButton">确认</button>
           </footer>
         </div>
       </section>
