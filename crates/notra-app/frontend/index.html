@@ -12,6 +12,12 @@
           <div class="brand-mark">N</div>
           <strong>Notra</strong>
         </section>
+        <nav class="app-menu-bar" aria-label="应用菜单">
+          <button class="app-menu-trigger" id="fileMenuButton" data-menu-trigger aria-haspopup="menu" aria-controls="fileMenu" aria-expanded="false">文件</button>
+          <button class="app-menu-trigger" id="editMenuButton" data-menu-trigger aria-haspopup="menu" aria-controls="editMenu" aria-expanded="false">编辑</button>
+          <button class="app-menu-trigger" id="searchMenuButton" data-menu-trigger aria-haspopup="menu" aria-controls="searchMenu" aria-expanded="false">查找</button>
+          <button class="app-menu-trigger" id="viewMenuButton" data-menu-trigger aria-haspopup="menu" aria-controls="viewMenu" aria-expanded="false">视图</button>
+        </nav>
         <div class="title-drag-zone"></div>
         <section class="title-actions">
           <button class="title-button" id="themeButton" aria-label="切换主题" title="切换主题">
@@ -35,21 +41,29 @@
       </header>
 
       <nav class="toolbar">
-        <div class="tool-group">
+        <div class="tool-group primary-actions" aria-label="常用工具">
+          <button class="tool-button" id="newButton" aria-label="新建 Ctrl+N" title="新建 Ctrl+N" aria-keyshortcuts="Control+N"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
+          <button class="tool-button" id="openButton" aria-label="打开文件 Ctrl+O" title="打开文件 Ctrl+O" aria-keyshortcuts="Control+O"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
+          <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近文件" title="最近文件" aria-haspopup="menu"><span class="icon-slot" data-icon="History"></span><span data-label>最近文件</span></button>
+          <button class="tool-button" id="workspaceButton" aria-label="工作区模式" title="工作区模式"><span class="icon-slot" data-icon="FolderTree"></span><span data-label>工作区模式</span></button>
           <button class="tool-button" id="singleModeButton" aria-label="单文件模式" title="单文件模式"><span class="icon-slot" data-icon="File"></span><span data-label>单文件模式</span></button>
-          <button class="tool-button" id="workspaceButton" aria-label="文件夹模式" title="文件夹模式"><span class="icon-slot" data-icon="FolderTree"></span><span data-label>文件夹模式</span></button>
           <span class="tool-divider"></span>
-          <button class="tool-button" id="newButton" aria-label="新建" title="新建"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
-          <button class="tool-button" id="openButton" aria-label="打开文件" title="打开文件"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
-          <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近文件" title="最近文件"><span class="icon-slot" data-icon="History"></span><span data-label>最近文件</span></button>
-          <span class="tool-divider"></span>
-          <button class="tool-button primary" id="saveButton" aria-label="保存" title="保存"><span class="icon-slot" data-icon="Save"></span><span data-label>保存</span></button>
-          <button class="tool-button" id="saveAsButton" aria-label="另存为" title="另存为"><span class="icon-slot" data-icon="SavePlus"></span><span data-label>另存为</span></button>
+          <button class="tool-button" id="saveButton" aria-label="保存 Ctrl+S" title="保存 Ctrl+S" aria-keyshortcuts="Control+S"><span class="icon-slot" data-icon="Save"></span><span data-label>保存</span></button>
           <button class="tool-button" id="saveAllButton" aria-label="保存全部" title="保存全部"><span class="icon-slot" data-icon="SaveAll"></span><span data-label>保存全部</span></button>
+          <button class="tool-button" id="saveAsButton" aria-label="另存为 Ctrl+Shift+S" title="另存为 Ctrl+Shift+S" aria-keyshortcuts="Control+Shift+S"><span class="icon-slot" data-icon="SavePlus"></span><span data-label>另存为</span></button>
           <span class="tool-divider"></span>
           <button class="tool-button" id="undoButton" aria-label="撤销" title="撤销"><span class="icon-slot" data-icon="Undo2"></span><span data-label>撤销</span></button>
           <button class="tool-button" id="redoButton" aria-label="重做" title="重做"><span class="icon-slot" data-icon="Redo2"></span><span data-label>重做</span></button>
-          <button class="tool-button" id="markdownPreviewButton" aria-label="Markdown 分屏预览" title="Markdown 分屏预览"><span class="icon-slot" data-icon="FileText"></span><span data-label>Markdown 分屏预览</span></button>
+          <button class="tool-button" id="uppercaseButton" aria-label="转为大写" title="转为大写"><span class="icon-slot" data-icon="CaseUpper"></span><span data-label>转为大写</span></button>
+          <button class="tool-button" id="lowercaseButton" aria-label="转为小写" title="转为小写"><span class="icon-slot" data-icon="CaseLower"></span><span data-label>转为小写</span></button>
+          <span class="tool-divider"></span>
+          <button class="tool-button" id="findButton" aria-label="查找 Ctrl+F" title="查找 Ctrl+F" aria-keyshortcuts="Control+F"><span class="icon-slot" data-icon="Search"></span><span data-label>查找</span></button>
+          <button class="tool-button" id="replaceButton" aria-label="替换 Ctrl+H" title="替换 Ctrl+H" aria-keyshortcuts="Control+H"><span class="icon-slot" data-icon="Replace"></span><span data-label>替换</span></button>
+          <button class="tool-button" id="goToLineButton" aria-label="跳转到行 Ctrl+G" title="跳转到行 Ctrl+G" aria-keyshortcuts="Control+G"><span class="icon-slot" data-icon="ListRestart"></span><span data-label>跳转到行</span></button>
+          <button class="tool-button" id="commandButton" aria-label="命令面板 Ctrl+P" title="命令面板 Ctrl+P" aria-keyshortcuts="Control+P"><span class="icon-slot" data-icon="Command"></span><span data-label>命令面板</span></button>
+          <span class="tool-divider"></span>
+          <button class="tool-button" id="wordWrapButton" aria-label="自动换行" title="自动换行" aria-pressed="false"><span class="icon-slot" data-icon="WrapText"></span><span data-label>自动换行</span></button>
+          <button class="tool-button" id="markdownPreviewButton" aria-label="Markdown 分屏预览" title="Markdown 分屏预览" aria-pressed="false"><span class="icon-slot" data-icon="FileText"></span><span data-label>Markdown 分屏预览</span></button>
         </div>
 
         <div class="tool-group right">
@@ -59,6 +73,55 @@
         </div>
       </nav>
 
+      <section class="popover app-menu hidden" id="fileMenu" role="menu" aria-label="文件菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="menuNewButton" role="menuitem"><span class="icon-slot" data-icon="FilePlus2"></span><strong>新建</strong><small>Ctrl+N</small></button>
+          <button class="menu-row" id="menuOpenButton" role="menuitem"><span class="icon-slot" data-icon="FolderOpen"></span><strong>打开文件</strong><small>Ctrl+O</small></button>
+          <button class="menu-row" id="menuRecentButton" role="menuitem"><span class="icon-slot" data-icon="History"></span><strong>最近文件</strong><small></small></button>
+          <button class="menu-row" id="menuWorkspaceButton" role="menuitem"><span class="icon-slot" data-icon="FolderTree"></span><strong>打开工作区</strong><small></small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="menuSaveButton" role="menuitem"><span class="icon-slot" data-icon="Save"></span><strong>保存</strong><small>Ctrl+S</small></button>
+          <button class="menu-row" id="menuSaveAllButton" role="menuitem"><span class="icon-slot" data-icon="SaveAll"></span><strong>保存全部</strong><small></small></button>
+          <button class="menu-row" id="menuSaveAsButton" role="menuitem"><span class="icon-slot" data-icon="SavePlus"></span><strong>另存为</strong><small>Ctrl+Shift+S</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="menuCloseButton" role="menuitem"><span class="icon-slot" data-icon="X"></span><strong>关闭当前标签</strong><small>Ctrl+W</small></button>
+        </div>
+      </section>
+
+      <section class="popover app-menu hidden" id="editMenu" role="menu" aria-label="编辑菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="menuUndoButton" role="menuitem"><span class="icon-slot" data-icon="Undo2"></span><strong>撤销</strong><small>Ctrl+Z</small></button>
+          <button class="menu-row" id="menuRedoButton" role="menuitem"><span class="icon-slot" data-icon="Redo2"></span><strong>重做</strong><small>Ctrl+Y</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="menuUppercaseButton" role="menuitem"><span class="icon-slot" data-icon="CaseUpper"></span><strong>转为大写</strong><small></small></button>
+          <button class="menu-row" id="menuLowercaseButton" role="menuitem"><span class="icon-slot" data-icon="CaseLower"></span><strong>转为小写</strong><small></small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="menuSelectAllButton" role="menuitem"><span class="icon-slot" data-icon="Check"></span><strong>全选</strong><small>Ctrl+A</small></button>
+        </div>
+      </section>
+
+      <section class="popover app-menu hidden" id="searchMenu" role="menu" aria-label="查找菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="menuFindButton" role="menuitem"><span class="icon-slot" data-icon="Search"></span><strong>查找</strong><small>Ctrl+F</small></button>
+          <button class="menu-row" id="menuReplaceButton" role="menuitem"><span class="icon-slot" data-icon="Replace"></span><strong>替换</strong><small>Ctrl+H</small></button>
+          <button class="menu-row" id="menuFindWorkspaceButton" role="menuitem"><span class="icon-slot" data-icon="Files"></span><strong>在文件中查找</strong><small>Ctrl+Shift+F</small></button>
+          <button class="menu-row" id="menuReplaceWorkspaceButton" role="menuitem"><span class="icon-slot" data-icon="ReplaceAll"></span><strong>在文件中替换</strong><small>Ctrl+Shift+H</small></button>
+          <button class="menu-row" id="menuGoToLineButton" role="menuitem"><span class="icon-slot" data-icon="ListRestart"></span><strong>跳转到行</strong><small>Ctrl+G</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="menuCommandButton" role="menuitem"><span class="icon-slot" data-icon="Command"></span><strong>命令面板</strong><small>Ctrl+P</small></button>
+        </div>
+      </section>
+
+      <section class="popover app-menu hidden" id="viewMenu" role="menu" aria-label="视图菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="menuWordWrapButton" role="menuitem"><span class="icon-slot" data-icon="WrapText"></span><strong>自动换行</strong><small></small></button>
+          <button class="menu-row" id="menuMarkdownButton" role="menuitem"><span class="icon-slot" data-icon="FileText"></span><strong>Markdown 分屏预览</strong><small></small></button>
+          <button class="menu-row" id="menuBottomButton" role="menuitem"><span class="icon-slot" data-icon="PanelBottom"></span><strong>底部面板</strong><small></small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="menuThemeButton" role="menuitem"><span class="icon-slot" data-icon="Moon"></span><strong>切换主题</strong><small></small></button>
+        </div>
+      </section>
+
       <section class="tabs" id="tabs"></section>
 
       <section class="workspace" id="workspace">
@@ -66,7 +129,7 @@
           <button class="rail-button active" id="directoryToggle" aria-label="目录" title="目录">
             <span class="icon-slot" data-icon="Files"></span>
           </button>
-          <button class="rail-button" id="findRailButton" aria-label="查找" title="查找">
+          <button class="rail-button" id="findRailButton" aria-label="在文件中查找 Ctrl+Shift+F" title="在文件中查找 Ctrl+Shift+F" aria-keyshortcuts="Control+Shift+F">
             <span class="icon-slot" data-icon="Search"></span>
           </button>
           <button class="rail-button" id="bottomRailButton" aria-label="输出面板" title="输出面板">
@@ -484,10 +547,12 @@
         <div class="command-list" id="commandList"></div>
       </section>
 
-      <section class="find-popover hidden" id="findPopover">
+      <section class="find-popover hidden" id="findPopover" role="dialog" aria-modal="false" aria-label="查找和替换">
         <div class="segmented find-drag-handle" id="findDragHandle" title="拖动查找框">
           <button class="seg active" data-find-view="find">查找</button>
           <button class="seg" data-find-view="replace">替换</button>
+          <button class="seg" data-find-view="workspace-find">文件查找</button>
+          <button class="seg" data-find-view="workspace-replace">文件替换</button>
           <button class="seg" data-find-view="mark">标记</button>
         </div>
         <div class="find-body">
@@ -509,12 +574,14 @@
             </fieldset>
             <datalist id="findHistoryList"></datalist>
             <datalist id="replaceHistoryDataList"></datalist>
-            <div class="hidden" aria-hidden="true">
-              <input id="directoryInput" />
-              <input id="fileGlobInput" value="*.*" />
-              <input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" />
-              <input type="checkbox" id="recursiveInput" checked />
-              <input type="checkbox" id="includeHiddenInput" />
+            <div class="workspace-search-fields hidden" id="workspaceSearchFields">
+              <label><span>搜索目录</span><input id="directoryInput" placeholder="选择工作目录" /></label>
+              <label><span>文件掩码</span><input id="fileGlobInput" value="*.*" placeholder="例如 *.ts;*.rs" /></label>
+              <label><span>排除目录</span><input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" /></label>
+              <div class="checks workspace-search-flags">
+                <label><input type="checkbox" id="recursiveInput" checked />包含子目录</label>
+                <label><input type="checkbox" id="includeHiddenInput" />包含隐藏文件</label>
+              </div>
             </div>
           </div>
           <div class="action-stack">
@@ -523,6 +590,8 @@
             <button id="findCurrentButton"><span class="icon-slot" data-icon="FileSearch"></span><span>当前文件中查找</span></button>
             <button id="replaceCurrentButton"><span class="icon-slot" data-icon="Replace"></span><span>替换当前</span></button>
             <button id="replaceAllCurrentButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>全部替换</span></button>
+            <button class="primary" id="findWorkspaceButton"><span class="icon-slot" data-icon="Files"></span><span>在文件中查找</span></button>
+            <button class="primary" id="previewWorkspaceReplaceButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>预览全部替换</span></button>
             <button id="markCurrentButton"><span class="icon-slot" data-icon="Highlighter"></span><span>标记当前</span></button>
             <button id="clearMarksButton"><span class="icon-slot" data-icon="Eraser"></span><span>清除标记</span></button>
             <button id="closeFindButton"><span class="icon-slot" data-icon="CircleX"></span><span>取消</span></button>

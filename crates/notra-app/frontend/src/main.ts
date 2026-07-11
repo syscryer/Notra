@@ -5,6 +5,8 @@ import {
   ArrowUp,
   Binary,
   Braces,
+  CaseLower,
+  CaseUpper,
   Check,
   ChevronDown,
   CircleX,
@@ -285,7 +287,7 @@ const encodings: EncodingLabel[] = [
 
 type SearchMode = "literal" | "extended" | "regex";
 type WorkMode = "single" | "workspace";
-type FindView = "find" | "replace" | "mark";
+type FindView = "find" | "replace" | "workspace-find" | "workspace-replace" | "mark";
 type SearchScope = "current" | "open" | "workspace" | "mark";
 type RenderWhitespaceMode = "none" | "selection" | "all";
 type SettingsSection = "appearance" | "editor" | "workspace" | "search" | "about";
@@ -677,6 +679,7 @@ type TextInputOptions = {
   subtitle: string;
   label: string;
   value?: string;
+  inputMode?: "text" | "numeric";
 };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -686,6 +689,8 @@ const lucideIcons: Record<string, IconNode> = {
   ArrowUp,
   Binary,
   Braces,
+  CaseLower,
+  CaseUpper,
   Check,
   ChevronDown,
   CircleX,
@@ -929,6 +934,7 @@ function bootstrap() {
 }
 
 function bindActions() {
+  bindAppMenus();
   $("singleModeButton").addEventListener("click", () => setWorkMode("single"));
   $("newButton").addEventListener("click", newDocument);
   $("openButton").addEventListener("click", openDocument);
@@ -938,9 +944,21 @@ function bindActions() {
   $("saveAllButton").addEventListener("click", saveAll);
   $("undoButton").addEventListener("click", () => editor.trigger("toolbar", "undo", null));
   $("redoButton").addEventListener("click", () => editor.trigger("toolbar", "redo", null));
-  $("findRailButton").addEventListener("click", () => {
+  $("uppercaseButton").addEventListener("click", transformToUppercase);
+  $("lowercaseButton").addEventListener("click", transformToLowercase);
+  $("findButton").addEventListener("click", () => {
     setFindView("find");
-    toggleFindOpen();
+    toggleFindOpen({ prefillFromSelection: true });
+  });
+  $("replaceButton").addEventListener("click", () => {
+    setFindView("replace");
+    toggleFindOpen({ prefillFromSelection: true });
+  });
+  $("commandButton").addEventListener("click", openCommandPalette);
+  $("goToLineButton").addEventListener("click", goToLine);
+  $("wordWrapButton").addEventListener("click", toggleWordWrap);
+  $("findRailButton").addEventListener("click", () => {
+    void openWorkspaceFind("workspace-find");
   });
   $("bottomRailButton").addEventListener("click", toggleBottom);
   $("collapseBottomButton").addEventListener("click", toggleBottom);
@@ -949,6 +967,8 @@ function bindActions() {
   $("findPreviousButton").addEventListener("click", () => void findPreviousResult());
   $("replaceCurrentButton").addEventListener("click", replaceCurrentFile);
   $("replaceAllCurrentButton").addEventListener("click", replaceAllCurrentFile);
+  $("findWorkspaceButton").addEventListener("click", () => void searchWorkspace());
+  $("previewWorkspaceReplaceButton").addEventListener("click", () => void previewWorkspaceReplace());
   $("markCurrentButton").addEventListener("click", markCurrentFile);
   $("clearMarksButton").addEventListener("click", clearSearchMarks);
   $("closeFindButton").addEventListener("click", closeFind);
@@ -1057,11 +1077,24 @@ function bindActions() {
   $("findInput").addEventListener("keydown", (event) => {
     if ((event as KeyboardEvent).key !== "Enter") return;
     event.preventDefault();
+    if (state.findView === "workspace-find") {
+      void searchWorkspace();
+      return;
+    }
+    if (state.findView === "workspace-replace") {
+      void previewWorkspaceReplace();
+      return;
+    }
     if ((event as KeyboardEvent).shiftKey) {
       void findPreviousResult();
     } else {
       void findNextResult();
     }
+  });
+  $("replaceInput").addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key !== "Enter" || state.findView !== "workspace-replace") return;
+    event.preventDefault();
+    void previewWorkspaceReplace();
   });
   [
     "matchCaseInput",
@@ -1076,7 +1109,14 @@ function bindActions() {
   });
 
   document.querySelectorAll<HTMLButtonElement>("[data-find-view]").forEach((button) => {
-    button.addEventListener("click", () => setFindView((button.dataset.findView as FindView) || "find"));
+    button.addEventListener("click", () => {
+      const view = (button.dataset.findView as FindView) || "find";
+      if (view === "workspace-find" || view === "workspace-replace") {
+        void openWorkspaceFind(view);
+      } else {
+        setFindView(view);
+      }
+    });
   });
 
   document.querySelectorAll<HTMLButtonElement>(".panel-tab").forEach((button) => {
@@ -1088,6 +1128,17 @@ function bindActions() {
 
   document.addEventListener("keydown", (event) => {
     if (handleContextMenuKeydown(event)) return;
+    if (event.key === "F2" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
+      const focusedTreeItem = document.activeElement?.closest<HTMLButtonElement>(".tree-item");
+      const activeTreeItem = $("tree").querySelector<HTMLButtonElement>(".tree-item.active");
+      const target = focusedTreeItem ?? activeTreeItem;
+      if (state.mode === "workspace" && state.showDirectory && target) {
+        event.preventDefault();
+        treeMenuTarget = treeContextTargetFromRow(target);
+        void renameTreeEntry();
+        return;
+      }
+    }
     if (event.key === "Escape") {
       if (!$("confirmDialog").classList.contains("hidden")) {
         resolveConfirmDialog(false);
@@ -1107,6 +1158,10 @@ function bindActions() {
       }
       if (!$("settingsPage").classList.contains("hidden")) {
         closeSettingsPage();
+        return;
+      }
+      if (!$("findPopover").classList.contains("hidden")) {
+        closeFind();
         return;
       }
       closeMenus();
@@ -1136,6 +1191,10 @@ function bindActions() {
       event.preventDefault();
       openCommandPalette();
     }
+    if (event.ctrlKey && event.key.toLowerCase() === "g") {
+      event.preventDefault();
+      goToLine();
+    }
     if (event.ctrlKey && event.key === "Tab") {
       event.preventDefault();
       activateAdjacentDocument(event.shiftKey ? -1 : 1);
@@ -1151,12 +1210,20 @@ function bindActions() {
       activateAdjacentDocument(-1);
       return;
     }
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      void openWorkspaceFind("workspace-find");
+    }
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "h") {
+      event.preventDefault();
+      void openWorkspaceFind("workspace-replace");
+    }
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();
       setFindView("find");
       toggleFindOpen({ prefillFromSelection: true });
     }
-    if (event.ctrlKey && event.key.toLowerCase() === "h") {
+    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "h") {
       event.preventDefault();
       setFindView("replace");
       toggleFindOpen({ prefillFromSelection: true });
@@ -1172,6 +1239,66 @@ function bindActions() {
   });
 
   editor.onDidChangeCursorPosition(renderChrome);
+}
+
+function bindAppMenus() {
+  const menus = [
+    ["fileMenuButton", "fileMenu"],
+    ["editMenuButton", "editMenu"],
+    ["searchMenuButton", "searchMenu"],
+    ["viewMenuButton", "viewMenu"],
+  ] as const;
+
+  for (const [triggerId, menuId] of menus) {
+    const trigger = $<HTMLButtonElement>(triggerId);
+    trigger.addEventListener("click", () => toggleAppMenu(menuId, trigger));
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openAppMenu(menuId, trigger);
+    });
+    trigger.addEventListener("pointerenter", () => {
+      if (!activeAppMenu()) return;
+      openAppMenu(menuId, trigger);
+    });
+  }
+
+  bindMenuAction("menuNewButton", newDocument);
+  bindMenuAction("menuOpenButton", () => void openDocument());
+  bindMenuAction("menuRecentButton", () => toggleMenu("recentMenu"));
+  bindMenuAction("menuWorkspaceButton", () => void enterWorkspaceMode());
+  bindMenuAction("menuSaveButton", () => void saveActive());
+  bindMenuAction("menuSaveAllButton", () => void saveAll());
+  bindMenuAction("menuSaveAsButton", () => void saveAsActive());
+  bindMenuAction("menuCloseButton", () => void closeDocument(activeDocument().id));
+  bindMenuAction("menuUndoButton", () => editor.trigger("menu", "undo", null));
+  bindMenuAction("menuRedoButton", () => editor.trigger("menu", "redo", null));
+  bindMenuAction("menuUppercaseButton", transformToUppercase);
+  bindMenuAction("menuLowercaseButton", transformToLowercase);
+  bindMenuAction("menuSelectAllButton", () => runEditorAction("editor.action.selectAll"));
+  bindMenuAction("menuFindButton", () => {
+    setFindView("find");
+    toggleFindOpen({ prefillFromSelection: true });
+  });
+  bindMenuAction("menuReplaceButton", () => {
+    setFindView("replace");
+    toggleFindOpen({ prefillFromSelection: true });
+  });
+  bindMenuAction("menuFindWorkspaceButton", () => void openWorkspaceFind("workspace-find"));
+  bindMenuAction("menuReplaceWorkspaceButton", () => void openWorkspaceFind("workspace-replace"));
+  bindMenuAction("menuGoToLineButton", goToLine);
+  bindMenuAction("menuCommandButton", openCommandPalette);
+  bindMenuAction("menuWordWrapButton", toggleWordWrap);
+  bindMenuAction("menuMarkdownButton", toggleMarkdownPreviewPreference);
+  bindMenuAction("menuBottomButton", toggleBottom);
+  bindMenuAction("menuThemeButton", toggleTheme);
+}
+
+function bindMenuAction(id: string, action: () => void) {
+  $(id).addEventListener("click", () => {
+    closeMenus();
+    action();
+  });
 }
 
 function bindSegmentedSetting(id: string, handler: (value: string) => void) {
@@ -1293,6 +1420,7 @@ function setWordWrap(enabled: boolean) {
   if (state.wordWrap === enabled) return;
   state.wordWrap = enabled;
   applyEditorSettings();
+  renderChrome();
   renderSettingsMenu();
   scheduleSessionSave();
   log(`自动换行 ${state.wordWrap ? "已开启" : "已关闭"}`);
@@ -1539,6 +1667,7 @@ function askTextInput(options: TextInputOptions): Promise<string | null> {
   $("inputLabel").textContent = options.label;
   const input = $("inputDialogInput") as HTMLInputElement;
   input.value = options.value ?? "";
+  input.inputMode = options.inputMode ?? "text";
   $("inputDialog").classList.remove("hidden");
   input.focus();
   input.select();
@@ -1868,7 +1997,9 @@ function showContextMenu(menu: HTMLElement, event: MouseEvent, fallbackWidth: nu
 }
 
 function activeContextMenu() {
-  return [$("tabMenu"), $("treeMenu")].find((menu) => !menu.classList.contains("hidden")) ?? null;
+  return [$("tabMenu"), $("treeMenu"), $("fileMenu"), $("editMenu"), $("searchMenu"), $("viewMenu")].find(
+    (menu) => !menu.classList.contains("hidden"),
+  ) ?? null;
 }
 
 function contextMenuButtons(menu: HTMLElement) {
@@ -1888,7 +2019,21 @@ function handleContextMenuKeydown(event: KeyboardEvent) {
   if (!menu) return false;
   if (event.key === "Escape") {
     event.preventDefault();
+    const trigger = menu.classList.contains("app-menu")
+      ? $<HTMLButtonElement>(`${menu.id.replace("Menu", "MenuButton")}`)
+      : null;
     closeMenus();
+    trigger?.focus();
+    return true;
+  }
+  if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && menu.classList.contains("app-menu")) {
+    event.preventDefault();
+    const menuIds = ["fileMenu", "editMenu", "searchMenu", "viewMenu"] as const;
+    const current = menuIds.indexOf(menu.id as (typeof menuIds)[number]);
+    const delta = event.key === "ArrowRight" ? 1 : -1;
+    const next = (current + delta + menuIds.length) % menuIds.length;
+    const trigger = $<HTMLButtonElement>(`${menuIds[next]}Button`);
+    openAppMenu(menuIds[next], trigger);
     return true;
   }
   if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -1904,7 +2049,7 @@ function handleContextMenuKeydown(event: KeyboardEvent) {
   }
   if (event.key === "Enter" || event.key === " ") {
     const button = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
-    if (button?.closest(".tab-menu, .tree-menu")) {
+    if (button?.closest(".tab-menu, .tree-menu, .app-menu")) {
       event.preventDefault();
       button.click();
       return true;
@@ -2015,6 +2160,7 @@ function treeContextTargetFromRow(row: HTMLButtonElement): TreeContextTarget {
 async function handleTreeItemKeydown(button: HTMLButtonElement, event: KeyboardEvent) {
   if (event.key !== "F2" && event.key !== "Delete") return;
   event.preventDefault();
+  event.stopPropagation();
   treeMenuTarget = treeContextTargetFromRow(button);
   if (event.key === "F2") {
     await renameTreeEntry();
@@ -2080,28 +2226,83 @@ async function renameTreeEntry() {
   const target = treeMenuTarget;
   closeMenus();
   if (!state.workspace || !target || target.isRoot) return;
-  const name = await askTextInput({
-    title: "重命名",
-    subtitle: target.name,
-    label: "新名称",
-    value: target.name,
-  });
-  if (!name || name === target.name) return;
-  const result = await withBusy("重命名", () =>
-    invoke<WorkspaceMutationDto>("rename_workspace_entry", {
-      request: {
-        root: state.workspace!.root,
-        path: target.path,
-        name,
-      },
-    }),
+  beginInlineTreeRename(target);
+}
+
+function beginInlineTreeRename(target: TreeContextTarget) {
+  const row = Array.from($("tree").querySelectorAll<HTMLButtonElement>(".tree-item")).find(
+    (item) => item.dataset.path === target.path,
   );
-  if (result.path) {
-    updateOpenDocumentsForRename(target.path, result.path, target.isDir);
-    updateCollapsedDirsForRename(target.path, result.path);
+  if (!row) return;
+
+  const renameRow = document.createElement("div");
+  renameRow.className = `${row.className} renaming`;
+  renameRow.style.cssText = row.style.cssText;
+  renameRow.dataset.path = target.path;
+  renameRow.innerHTML = row.innerHTML;
+
+  const name = renameRow.querySelector<HTMLElement>(".tree-name");
+  const input = document.createElement("input");
+  input.className = "tree-rename-input";
+  input.value = target.name;
+  input.size = Math.max(8, Math.min(40, target.name.length + 2));
+  input.setAttribute("aria-label", `重命名 ${target.name}`);
+  input.spellcheck = false;
+  name?.replaceWith(input);
+  row.replaceWith(renameRow);
+
+  let settled = false;
+  const finish = (commit: boolean) => {
+    if (settled) return;
+    settled = true;
+    if (!commit) {
+      renderWorkspace();
+      return;
+    }
+    void commitInlineTreeRename(target, input.value.trim());
+  };
+
+  input.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") {
+      event.preventDefault();
+      finish(true);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.focus();
+  const extensionIndex = target.isDir ? -1 : target.name.lastIndexOf(".");
+  input.setSelectionRange(0, extensionIndex > 0 ? extensionIndex : target.name.length);
+}
+
+async function commitInlineTreeRename(target: TreeContextTarget, name: string) {
+  if (!state.workspace || !name || name === target.name) {
+    renderWorkspace();
+    return;
   }
-  applyWorkspaceMutation(result);
-  log(`重命名为 ${name}`);
+  try {
+    const result = await withBusy("重命名", () =>
+      invoke<WorkspaceMutationDto>("rename_workspace_entry", {
+        request: {
+          root: state.workspace!.root,
+          path: target.path,
+          name,
+        },
+      }),
+    );
+    if (result.path) {
+      updateOpenDocumentsForRename(target.path, result.path, target.isDir);
+      updateCollapsedDirsForRename(target.path, result.path);
+    }
+    applyWorkspaceMutation(result);
+    log(`重命名为 ${name}`);
+  } catch (error) {
+    renderWorkspace();
+    log(`重命名失败：${String(error)}`);
+  }
 }
 
 async function deleteTreeEntry() {
@@ -2731,7 +2932,7 @@ async function searchWorkspace() {
       },
     }),
   );
-  setSearchResults(report, "workspace", -1);
+  setSearchResults(report, "workspace", -1, true);
   log(`目录查找 ${report.total} 个命中`);
 }
 
@@ -3112,6 +3313,9 @@ function renderChrome() {
   );
   $("singleModeButton").classList.toggle("active", state.mode === "single");
   $("workspaceButton").classList.toggle("active", state.mode === "workspace");
+  setButtonLabel("wordWrapButton", "自动换行", `自动换行 ${state.wordWrap ? "已开启" : "已关闭"}`);
+  $("wordWrapButton").classList.toggle("state-on", state.wordWrap);
+  $("wordWrapButton").setAttribute("aria-pressed", String(state.wordWrap));
   setButtonLabel("languageButton", languageLabel(doc.language), `语言 ${languageLabel(doc.language)}`);
   setButtonLabel("encodingButton", doc.encoding, `编码 ${doc.encoding}`);
   $("encodingNotice").textContent = `${doc.encodingStatus} ${doc.encoding}`;
@@ -3124,6 +3328,22 @@ function renderChrome() {
       : "Markdown 分屏预览：仅 Markdown 文档显示",
   );
   $("markdownPreviewButton").classList.toggle("active", isMarkdownPreviewEnabled(doc));
+  $<HTMLButtonElement>("markdownPreviewButton").disabled = !isMarkdownLikeDocument(doc);
+  $("markdownPreviewButton").setAttribute("aria-pressed", String(isMarkdownPreviewEnabled(doc)));
+  $<HTMLButtonElement>("saveButton").disabled = doc.readOnly || (Boolean(doc.path) && !doc.dirty);
+  $<HTMLButtonElement>("saveAsButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("saveAllButton").disabled = !state.documents.some((item) => item.dirty && !item.readOnly);
+  $<HTMLButtonElement>("uppercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("lowercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("menuSaveButton").disabled = $<HTMLButtonElement>("saveButton").disabled;
+  $<HTMLButtonElement>("menuSaveAsButton").disabled = $<HTMLButtonElement>("saveAsButton").disabled;
+  $<HTMLButtonElement>("menuSaveAllButton").disabled = $<HTMLButtonElement>("saveAllButton").disabled;
+  $<HTMLButtonElement>("menuUppercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("menuLowercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("menuMarkdownButton").disabled = $<HTMLButtonElement>("markdownPreviewButton").disabled;
+  $("menuWordWrapButton").classList.toggle("active", state.wordWrap);
+  $("menuMarkdownButton").classList.toggle("active", isMarkdownPreviewEnabled(doc));
+  $("menuBottomButton").classList.toggle("active", state.showBottom);
   setThemeButton();
 
   const tabs = $("tabs");
@@ -3687,21 +3907,28 @@ function isMarkdownLikeLanguage(language: string) {
 }
 
 function setFindView(view: FindView, persist = true) {
-  if (!["find", "replace", "mark"].includes(view)) view = "find";
+  if (!["find", "replace", "workspace-find", "workspace-replace", "mark"].includes(view)) view = "find";
   state.findView = view;
   $("findPopover").dataset.view = view;
   document.querySelectorAll<HTMLButtonElement>("[data-find-view]").forEach((button) => {
     button.classList.toggle("active", button.dataset.findView === view);
   });
 
-  const replaceVisible = view === "replace";
+  const workspaceVisible = view === "workspace-find" || view === "workspace-replace";
+  const replaceVisible = view === "replace" || view === "workspace-replace";
   toggleInputRow("replaceInput", replaceVisible);
+  $("workspaceSearchFields").classList.toggle("hidden", !workspaceVisible);
+  toggleCheckRow("reverseSearchInput", !workspaceVisible);
+  toggleCheckRow("wrapSearchInput", !workspaceVisible);
+  toggleCheckRow("searchSelectionInput", !workspaceVisible);
 
   toggleAction("findNextButton", view === "find");
   toggleAction("findPreviousButton", view === "find");
   toggleAction("findCurrentButton", view === "find");
-  toggleAction("replaceCurrentButton", replaceVisible);
-  toggleAction("replaceAllCurrentButton", replaceVisible);
+  toggleAction("replaceCurrentButton", view === "replace");
+  toggleAction("replaceAllCurrentButton", view === "replace");
+  toggleAction("findWorkspaceButton", view === "workspace-find");
+  toggleAction("previewWorkspaceReplaceButton", view === "workspace-replace");
   toggleAction("markCurrentButton", view === "mark");
   toggleAction("clearMarksButton", view === "mark");
   if (persist) scheduleSessionSave();
@@ -3768,6 +3995,44 @@ function toggleMenu(id: "languageMenu" | "encodingMenu" | "lineEndingMenu" | "re
   }
 }
 
+async function openWorkspaceFind(view: "workspace-find" | "workspace-replace") {
+  if (!state.workspace) {
+    await enterWorkspaceMode();
+    if (!state.workspace) return;
+  } else if (state.mode !== "workspace") {
+    setWorkMode("workspace");
+  }
+  ($("directoryInput") as HTMLInputElement).value ||= state.workspace.root;
+  setFindView(view);
+  toggleFindOpen({ prefillFromSelection: true });
+}
+
+function toggleAppMenu(id: "fileMenu" | "editMenu" | "searchMenu" | "viewMenu", trigger: HTMLButtonElement) {
+  if ($(id).classList.contains("hidden")) {
+    openAppMenu(id, trigger);
+  } else {
+    closeMenus();
+    trigger.focus();
+  }
+}
+
+function openAppMenu(id: "fileMenu" | "editMenu" | "searchMenu" | "viewMenu", trigger: HTMLButtonElement) {
+  closeMenus();
+  const menu = $(id);
+  const triggerRect = trigger.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(triggerRect.left, window.innerWidth - 280))}px`;
+  menu.style.top = "38px";
+  menu.classList.remove("hidden");
+  trigger.setAttribute("aria-expanded", "true");
+  menu.querySelector<HTMLButtonElement>(".menu-row:not(:disabled)")?.focus();
+}
+
+function activeAppMenu() {
+  return [$("fileMenu"), $("editMenu"), $("searchMenu"), $("viewMenu")].find(
+    (menu) => !menu.classList.contains("hidden"),
+  ) ?? null;
+}
+
 function closeMenus() {
   $("languageMenu").classList.add("hidden");
   $("encodingMenu").classList.add("hidden");
@@ -3775,6 +4040,13 @@ function closeMenus() {
   $("recentMenu").classList.add("hidden");
   $("tabMenu").classList.add("hidden");
   $("treeMenu").classList.add("hidden");
+  $("fileMenu").classList.add("hidden");
+  $("editMenu").classList.add("hidden");
+  $("searchMenu").classList.add("hidden");
+  $("viewMenu").classList.add("hidden");
+  document.querySelectorAll<HTMLButtonElement>(".app-menu-trigger").forEach((trigger) => {
+    trigger.setAttribute("aria-expanded", "false");
+  });
 }
 
 function hasOpenFontDropdown() {
@@ -3819,6 +4091,46 @@ function runEditorAction(actionId: string, successMessage?: string) {
   if (successMessage) log(successMessage);
 }
 
+function transformToUppercase() {
+  runEditorAction("editor.action.transformToUppercase", "已转为大写");
+}
+
+function transformToLowercase() {
+  runEditorAction("editor.action.transformToLowercase", "已转为小写");
+}
+
+async function goToLine() {
+  const model = editor.getModel();
+  if (!model) return;
+  const lineCount = model.getLineCount();
+  let value = String(editor.getPosition()?.lineNumber ?? 1);
+  let subtitle = `当前文档共 ${lineCount} 行`;
+
+  while (true) {
+    const input = await askTextInput({
+      title: "跳转到行",
+      subtitle,
+      label: `行号（1 - ${lineCount}）`,
+      value,
+      inputMode: "numeric",
+    });
+    if (input === null) {
+      editor.focus();
+      return;
+    }
+    const lineNumber = Number(input);
+    if (Number.isInteger(lineNumber) && lineNumber >= 1 && lineNumber <= lineCount) {
+      editor.setPosition({ lineNumber, column: 1 });
+      editor.revealLineInCenterIfOutsideViewport(lineNumber);
+      editor.focus();
+      log(`跳转到第 ${lineNumber} 行`);
+      return;
+    }
+    value = input;
+    subtitle = `请输入 1 到 ${lineCount} 之间的整数`;
+  }
+}
+
 function renderCommandList(query: string) {
   const commands = [
     ["新建文件", newDocument],
@@ -3855,8 +4167,10 @@ function renderCommandList(query: string) {
     ["复制", () => runEditorAction("editor.action.clipboardCopyAction")],
     ["剪切", () => runEditorAction("editor.action.clipboardCutAction")],
     ["粘贴", () => runEditorAction("editor.action.clipboardPasteAction")],
+    ["转为大写", transformToUppercase],
+    ["转为小写", transformToLowercase],
     ["格式化文档", () => runEditorAction("editor.action.formatDocument", "已执行格式化命令")],
-    ["转到行", () => runEditorAction("editor.action.gotoLine")],
+    ["跳转到行", goToLine],
     ["自动换行", toggleWordWrap],
     ["显示缩略图", toggleMinimap],
     ["显示空白符", cycleWhitespace],
@@ -4255,6 +4569,7 @@ function defineThemes() {
     colors: {
       "editor.background": "#fbfcff",
       "editor.foreground": "#111827",
+      "editorGutter.background": "#f5f8fc",
       "editorLineNumber.foreground": "#8b97a8",
       "editorLineNumber.activeForeground": "#3238d8",
       "editorCursor.foreground": "#3238d8",
@@ -4285,6 +4600,7 @@ function defineThemes() {
     colors: {
       "editor.background": "#151b26",
       "editor.foreground": "#edf2fb",
+      "editorGutter.background": "#1d2431",
       "editorLineNumber.foreground": "#667085",
       "editorLineNumber.activeForeground": "#858bff",
       "editorCursor.foreground": "#858bff",

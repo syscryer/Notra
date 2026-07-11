@@ -174,6 +174,7 @@ select:focus-visible {
 }
 
 .brand,
+.app-menu-bar,
 .title-actions,
 .tool-group,
 .status-left,
@@ -187,6 +188,30 @@ select:focus-visible {
 .brand {
   height: 100%;
   padding-right: 16px;
+}
+
+.app-menu-bar {
+  height: 100%;
+  gap: 2px;
+}
+
+.app-menu-trigger {
+  height: 28px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: transparent;
+  font-size: 12px;
+}
+
+.app-menu-trigger:hover,
+.app-menu-trigger:focus-visible,
+.app-menu-trigger[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--line-soft);
 }
 
 .brand-mark {
@@ -282,6 +307,17 @@ select:focus-visible {
   overflow-y: hidden;
 }
 
+.tool-group.primary-actions {
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tool-group.primary-actions::-webkit-scrollbar {
+  display: none;
+}
+
 .tool-group.right {
   justify-content: end;
   margin-left: auto;
@@ -353,6 +389,27 @@ select:focus-visible {
 .panel-tab.active,
 .seg.active {
   color: var(--primary);
+  background: var(--primary-2);
+  border-color: var(--primary-3);
+}
+
+.tool-button:disabled,
+.tool-button:disabled:hover {
+  color: var(--text-3);
+  background: transparent;
+  border-color: transparent;
+  cursor: not-allowed;
+  opacity: 0.46;
+}
+
+.toolbar .tool-button.state-on {
+  color: var(--primary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.toolbar .tool-button.state-on:hover,
+.toolbar .tool-button.state-on:focus-visible {
   background: var(--primary-2);
   border-color: var(--primary-3);
 }
@@ -659,6 +716,29 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.tree-item.renaming {
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--primary-3);
+}
+
+.tree-rename-input {
+  min-width: 96px;
+  max-width: 280px;
+  height: 23px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  outline: none;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0 5px;
+  font-size: 13px;
+  line-height: 21px;
+}
+
+.tree-rename-input:focus {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 16%, transparent);
+}
+
 .tree-file-icon-svg {
   position: relative;
   width: 20px;
@@ -744,6 +824,10 @@ select:focus-visible {
   min-height: 0;
   width: 100%;
   height: 100%;
+}
+
+.monaco-editor .margin {
+  box-shadow: inset -1px 0 0 var(--line-soft);
 }
 
 .markdown-preview {
@@ -1027,6 +1111,13 @@ select:focus-visible {
   width: 276px;
 }
 
+.app-menu {
+  right: auto;
+  width: 268px;
+  max-height: none;
+  border-radius: 10px;
+}
+
 .tab-menu {
   width: 264px;
   max-height: none;
@@ -1223,6 +1314,7 @@ select:focus-visible {
 
 .segmented {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 8px;
   background: var(--glass-head);
@@ -1295,6 +1387,19 @@ select:focus-visible {
   border: 1px solid var(--glass-border);
   border-radius: 10px;
   background: color-mix(in srgb, var(--glass-surface-strong) 70%, transparent);
+}
+
+.workspace-search-fields {
+  display: grid;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.workspace-search-flags {
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--glass-surface-strong) 58%, transparent);
 }
 
 .checks label {
