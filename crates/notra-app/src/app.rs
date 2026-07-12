@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const TREE_LIMIT: usize = 2500;
+const TREE_LIMIT: usize = 50_000;
 const TREE_MAX_DEPTH: usize = 8;
 const SUPPORTED_LANGUAGES: &[&str] = &[
     "plaintext",
@@ -667,7 +667,7 @@ fn document_to_dto(doc: Document) -> DocumentDto {
 
 fn workspace_to_dto(root: &Path) -> WorkspaceDto {
     let mut items = Vec::new();
-    collect_tree_items(root, 0, &mut items);
+    collect_tree_items(root, 0, 0, &mut items);
     WorkspaceDto {
         root: root.display().to_string(),
         name: root
@@ -679,8 +679,8 @@ fn workspace_to_dto(root: &Path) -> WorkspaceDto {
     }
 }
 
-fn collect_tree_items(root: &Path, depth: usize, out: &mut Vec<TreeItemDto>) {
-    if depth > TREE_MAX_DEPTH || out.len() >= TREE_LIMIT {
+fn collect_tree_items(root: &Path, depth: usize, reserved: usize, out: &mut Vec<TreeItemDto>) {
+    if depth > TREE_MAX_DEPTH || out.len().saturating_add(reserved) >= TREE_LIMIT {
         return;
     }
 
@@ -688,31 +688,33 @@ fn collect_tree_items(root: &Path, depth: usize, out: &mut Vec<TreeItemDto>) {
         return;
     };
 
-    let mut entries = entries.filter_map(Result::ok).collect::<Vec<_>>();
+    let mut entries = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file_type = entry.file_type().ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path = entry.path();
+            let is_dir = file_type.is_dir();
+            if should_skip_tree_entry(&name, is_dir)
+                || (file_type.is_file() && !is_text_like(&path))
+            {
+                return None;
+            }
+            Some((entry, file_type, name, path))
+        })
+        .collect::<Vec<_>>();
     entries.sort_by_key(|entry| {
-        let is_file = entry.file_type().map(|ty| ty.is_file()).unwrap_or(false);
-        (
-            is_file,
-            entry.file_name().to_string_lossy().to_ascii_lowercase(),
-        )
+        let is_file = entry.1.is_file();
+        (is_file, entry.2.to_ascii_lowercase())
     });
 
-    for entry in entries {
-        if out.len() >= TREE_LIMIT {
+    let entry_count = entries.len();
+    for (index, (_entry, file_type, name, path)) in entries.into_iter().enumerate() {
+        let remaining_siblings = entry_count - index - 1;
+        if out.len().saturating_add(reserved + remaining_siblings) >= TREE_LIMIT {
             break;
         }
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if should_skip_tree_entry(&name) {
-            continue;
-        }
-        let Ok(file_type) = entry.file_type() else {
-            continue;
-        };
         let is_dir = file_type.is_dir();
-        if file_type.is_file() && !is_text_like(&path) {
-            continue;
-        }
         out.push(TreeItemDto {
             path: path.display().to_string(),
             name,
@@ -720,7 +722,7 @@ fn collect_tree_items(root: &Path, depth: usize, out: &mut Vec<TreeItemDto>) {
             is_dir,
         });
         if is_dir {
-            collect_tree_items(&path, depth + 1, out);
+            collect_tree_items(&path, depth + 1, reserved + remaining_siblings, out);
         }
     }
 }
@@ -909,12 +911,13 @@ fn parse_search_mode(value: &str) -> SearchMode {
     }
 }
 
-fn should_skip_tree_entry(name: &str) -> bool {
-    name.starts_with('.')
-        || matches!(
-            name,
-            "target" | "target-codex-run" | "node_modules" | "dist" | "build"
-        )
+fn should_skip_tree_entry(name: &str, is_dir: bool) -> bool {
+    (is_dir && matches!(name, ".git" | ".idea" | ".vscode"))
+        || (is_dir
+            && matches!(
+                name,
+                "target" | "target-codex-run" | "node_modules" | "dist" | "build"
+            ))
 }
 
 fn is_text_like(path: &Path) -> bool {

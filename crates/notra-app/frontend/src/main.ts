@@ -23,18 +23,20 @@ import {
   FolderOpen,
   FolderPlus,
   FolderTree,
+  FolderX,
   Highlighter,
   History,
   Info,
   ListRestart,
+  ListTree,
   LoaderCircle,
   Map,
   Maximize2,
   Minus,
   Moon,
-  PanelBottom,
-  PanelBottomClose,
   PanelLeftClose,
+  PanelRightClose,
+  PanelRightOpen,
   Pilcrow,
   Redo2,
   RefreshCw,
@@ -170,6 +172,7 @@ interface SessionSnapshot {
   openFiles: string[];
   draftDocuments: DraftDocumentSnapshot[];
   recentFiles: string[];
+  recentWorkspaces: string[];
   workspaceRoot: string | null;
   workMode: WorkMode;
   showDirectory: boolean;
@@ -177,7 +180,7 @@ interface SessionSnapshot {
   activePath: string | null;
   activeDraftId: string | null;
   darkMode: boolean;
-  showBottom: boolean;
+  rightSidebarWidth: number;
   showMarkdownPreview: boolean;
   markdownPreviewPreferenceSet: boolean;
   searchHistory: string[];
@@ -287,8 +290,9 @@ const encodings: EncodingLabel[] = [
 
 type SearchMode = "literal" | "extended" | "regex";
 type WorkMode = "single" | "workspace";
-type FindView = "find" | "replace" | "workspace-find" | "workspace-replace" | "mark";
-type SearchScope = "current" | "open" | "workspace" | "mark";
+type FindView = "find" | "replace" | "workspace-find" | "workspace-replace";
+type RightTool = "search" | "outline";
+type SearchScope = "current" | "open" | "workspace";
 type RenderWhitespaceMode = "none" | "selection" | "all";
 type SettingsSection = "appearance" | "editor" | "workspace" | "search" | "about";
 type FontMode = "preset" | "custom";
@@ -605,11 +609,11 @@ const state = {
   mode: "single" as WorkMode,
   collapsedDirs: new Set<string>(),
   recentFiles: [] as string[],
+  recentWorkspaces: [] as string[],
   searchHistory: [] as string[],
   replaceHistory: [] as string[],
   searchFavorites: [] as string[],
   showDirectory: false,
-  showBottom: true,
   showMarkdownPreview: true,
   markdownPreviewPreferenceSet: false,
   darkMode: false,
@@ -636,6 +640,8 @@ const state = {
   editorFontPreset: DEFAULT_EDITOR_FONT_PRESET as EditorFontPreset,
   editorFontCustom: EDITOR_FONT_STACKS[DEFAULT_EDITOR_FONT_PRESET],
   settingsSection: "appearance" as SettingsSection,
+  rightTool: "search" as RightTool,
+  rightSidebarWidth: 420,
   busyMessage: "",
   restoring: false,
 };
@@ -656,7 +662,7 @@ let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
 let titlebarMaximizeToggleAt = 0;
 let titlebarDragState: { pointerId: number; startX: number; startY: number } | null = null;
-let findDragState: { pointerId: number; offsetX: number; offsetY: number } | null = null;
+let rightSidebarResizeState: { pointerId: number } | null = null;
 let markdownPreviewTimer = 0;
 
 type UnsavedChoice = "save" | "discard" | "cancel";
@@ -707,18 +713,20 @@ const lucideIcons: Record<string, IconNode> = {
   FolderOpen,
   FolderPlus,
   FolderTree,
+  FolderX,
   Highlighter,
   History,
   Info,
   ListRestart,
+  ListTree,
   LoaderCircle,
   Map,
   Maximize2,
   Minus,
   Moon,
-  PanelBottom,
-  PanelBottomClose,
   PanelLeftClose,
+  PanelRightClose,
+  PanelRightOpen,
   Pilcrow,
   Redo2,
   RefreshCw,
@@ -921,20 +929,61 @@ function bootstrap() {
   searchDecorations = editor.createDecorationsCollection();
   activeSearchDecoration = editor.createDecorationsCollection();
   editor.onDidScrollChange(syncMarkdownPreviewScroll);
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
+    setFindView("find");
+    toggleFindOpen({ prefillFromSelection: true });
+  });
+  const editorResizeObserver = new ResizeObserver(() => requestEditorLayout());
+  editorResizeObserver.observe($("editor"));
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => {
+    setFindView("replace");
+    toggleFindOpen({ prefillFromSelection: true });
+  });
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => {
+    void openWorkspaceFind("workspace-find");
+  });
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyH, () => {
+    void openWorkspaceFind("workspace-replace");
+  });
 
-  bindActions();
+bindActions();
   bindWindowControls();
   bindWindowCloseGuard();
-  bindFindPopoverDrag();
+  bindRightSidebarResize();
   bindOutsideDismissal();
   setFindView("find", false);
   renderAll();
-  void restoreSession().then(openStartupArgs);
+  // First paint can run before grid tracks resolve; force layout so Monaco is not 0×0.
+  requestEditorLayout();
+  void restoreSession()
+    .then(openStartupArgs)
+    .finally(markAppReady);
   log("Notra Monaco UI ready");
+}
+
+function markAppReady() {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      requestEditorLayout();
+      document.body.classList.remove("booting");
+      $("bootSplash")?.remove();
+    });
+  });
 }
 
 function bindActions() {
   bindAppMenus();
+  $("tree").addEventListener("click", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".tree-item");
+    if (!button) return;
+    const path = button.dataset.path ?? "";
+    if (button.classList.contains("dir")) toggleDirectoryCollapse(path);
+    else if (button.classList.contains("file")) void openPath(path);
+  });
+  $("tree").addEventListener("keydown", (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".tree-item");
+    if (button) void handleTreeItemKeydown(button, event as KeyboardEvent);
+  });
   $("singleModeButton").addEventListener("click", () => setWorkMode("single"));
   $("newButton").addEventListener("click", newDocument);
   $("openButton").addEventListener("click", openDocument);
@@ -960,8 +1009,7 @@ function bindActions() {
   $("findRailButton").addEventListener("click", () => {
     void openWorkspaceFind("workspace-find");
   });
-  $("bottomRailButton").addEventListener("click", toggleBottom);
-  $("collapseBottomButton").addEventListener("click", toggleBottom);
+  $("rightSidebarToggleButton").addEventListener("click", toggleRightSidebar);
   $("findCurrentButton").addEventListener("click", () => findCurrent(true));
   $("findNextButton").addEventListener("click", () => void findNextResult());
   $("findPreviousButton").addEventListener("click", () => void findPreviousResult());
@@ -969,9 +1017,45 @@ function bindActions() {
   $("replaceAllCurrentButton").addEventListener("click", replaceAllCurrentFile);
   $("findWorkspaceButton").addEventListener("click", () => void searchWorkspace());
   $("previewWorkspaceReplaceButton").addEventListener("click", () => void previewWorkspaceReplace());
-  $("markCurrentButton").addEventListener("click", markCurrentFile);
-  $("clearMarksButton").addEventListener("click", clearSearchMarks);
-  $("closeFindButton").addEventListener("click", closeFind);
+  $("closeCurrentFindButton").addEventListener("click", closeFind);
+  $("currentFindPreviousButton").addEventListener("click", () => {
+    syncCurrentFindControls();
+    void findPreviousResult();
+  });
+  $("currentFindNextButton").addEventListener("click", () => {
+    syncCurrentFindControls();
+    void findNextResult();
+  });
+  $("currentFindAllButton").addEventListener("click", () => {
+    syncCurrentFindControls();
+    findCurrent(true);
+  });
+  $("currentReplaceButton").addEventListener("click", () => {
+    syncCurrentFindControls();
+    replaceCurrentFile();
+  });
+  $("currentReplaceAllButton").addEventListener("click", () => {
+    syncCurrentFindControls();
+    replaceAllCurrentFile();
+  });
+  $("currentFindInput").addEventListener("input", syncCurrentFindControls);
+  $("currentReplaceInput").addEventListener("input", syncCurrentFindControls);
+  ["currentMatchCaseInput", "currentWholeWordInput", "currentRegexInput"].forEach((id) => {
+    $(id).addEventListener("change", syncCurrentFindControls);
+  });
+  $("currentFindInput").addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key !== "Enter") return;
+    event.preventDefault();
+    syncCurrentFindControls();
+    if ((event as KeyboardEvent).shiftKey) void findPreviousResult();
+    else void findNextResult();
+  });
+  $("rightSearchToolButton").addEventListener("click", () => {
+    if (state.mode !== "workspace" || !state.workspace) return;
+    if (state.findView !== "workspace-find" && state.findView !== "workspace-replace") setFindView("workspace-find");
+    setRightTool("search");
+  });
+  $("rightOutlineToolButton").addEventListener("click", () => setRightTool("outline"));
   $("languageButton").addEventListener("click", () => toggleMenu("languageMenu"));
   $("encodingButton").addEventListener("click", () => toggleMenu("encodingMenu"));
   $("lineEndingButton").addEventListener("click", () => toggleMenu("lineEndingMenu"));
@@ -996,7 +1080,6 @@ function bindActions() {
   bindSegmentedSetting("settingsWordWrapControl", (value) => setWordWrap(value === "on"));
   bindSegmentedSetting("settingsMinimapControl", (value) => setMinimap(value === "on"));
   bindSegmentedSetting("settingsWhitespaceControl", (value) => setWhitespace(value as RenderWhitespaceMode));
-  bindSegmentedSetting("settingsBottomControl", (value) => setBottomVisible(value === "on"));
   bindSegmentedSetting("settingsMarkdownControl", (value) => setMarkdownPreviewVisible(value === "on"));
   bindSegmentedSetting("settingsModeControl", (value) => {
     if (value === "workspace") {
@@ -1091,6 +1174,7 @@ function bindActions() {
       void findNextResult();
     }
   });
+  $("closeWorkspaceButton").addEventListener("click", closeWorkspace);
   $("replaceInput").addEventListener("keydown", (event) => {
     if ((event as KeyboardEvent).key !== "Enter" || state.findView !== "workspace-replace") return;
     event.preventDefault();
@@ -1119,12 +1203,6 @@ function bindActions() {
     });
   });
 
-  document.querySelectorAll<HTMLButtonElement>(".panel-tab").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.panel = button.dataset.panel as typeof state.panel;
-      renderBottom();
-    });
-  });
 
   document.addEventListener("keydown", (event) => {
     if (handleContextMenuKeydown(event)) return;
@@ -1175,9 +1253,13 @@ function bindActions() {
         void saveActive();
       }
     }
-    if (event.ctrlKey && event.key.toLowerCase() === "o") {
+    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "o") {
       event.preventDefault();
       void openDocument();
+    }
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "o" && isMarkdownLikeDocument()) {
+      event.preventDefault();
+      openMarkdownOutline();
     }
     if (event.ctrlKey && event.key.toLowerCase() === "n") {
       event.preventDefault();
@@ -1267,6 +1349,7 @@ function bindAppMenus() {
   bindMenuAction("menuOpenButton", () => void openDocument());
   bindMenuAction("menuRecentButton", () => toggleMenu("recentMenu"));
   bindMenuAction("menuWorkspaceButton", () => void enterWorkspaceMode());
+  bindMenuAction("menuCloseWorkspaceButton", closeWorkspace);
   bindMenuAction("menuSaveButton", () => void saveActive());
   bindMenuAction("menuSaveAllButton", () => void saveAll());
   bindMenuAction("menuSaveAsButton", () => void saveAsActive());
@@ -1290,7 +1373,7 @@ function bindAppMenus() {
   bindMenuAction("menuCommandButton", openCommandPalette);
   bindMenuAction("menuWordWrapButton", toggleWordWrap);
   bindMenuAction("menuMarkdownButton", toggleMarkdownPreviewPreference);
-  bindMenuAction("menuBottomButton", toggleBottom);
+  bindMenuAction("menuOutlineButton", openMarkdownOutline);
   bindMenuAction("menuThemeButton", toggleTheme);
 }
 
@@ -1444,14 +1527,6 @@ function setWhitespace(value: RenderWhitespaceMode) {
   log(`空白符显示：${whitespaceLabel(state.renderWhitespace)}`);
 }
 
-function setBottomVisible(visible: boolean) {
-  if (state.showBottom === visible) return;
-  state.showBottom = visible;
-  renderBottom();
-  renderSettingsMenu();
-  scheduleSessionSave();
-}
-
 function setMarkdownPreviewVisible(visible: boolean) {
   const changed = state.showMarkdownPreview !== visible;
   state.showMarkdownPreview = visible;
@@ -1521,43 +1596,43 @@ function toggleTitlebarMaximize() {
   void appWindow.toggleMaximize();
 }
 
-function bindFindPopoverDrag() {
-  const popover = $("findPopover");
-  const handle = $("findDragHandle");
+function bindRightSidebarResize() {
+  const handle = $("rightSidebarResize");
   handle.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0 || isInteractiveTarget(event.target)) return;
-    const rect = popover.getBoundingClientRect();
-    findDragState = {
-      pointerId: event.pointerId,
-      offsetX: event.clientX - rect.left,
-      offsetY: event.clientY - rect.top,
-    };
-    popover.style.left = `${rect.left}px`;
-    popover.style.top = `${rect.top}px`;
-    popover.style.right = "auto";
-    popover.classList.add("dragging");
+    if (event.button !== 0) return;
+    rightSidebarResizeState = { pointerId: event.pointerId };
+    document.body.classList.add("resizing-sidebar");
     handle.setPointerCapture(event.pointerId);
     event.preventDefault();
   });
   handle.addEventListener("pointermove", (event) => {
-    if (!findDragState || event.pointerId !== findDragState.pointerId) return;
-    const maxLeft = Math.max(8, window.innerWidth - popover.offsetWidth - 8);
-    const maxTop = Math.max(48, window.innerHeight - popover.offsetHeight - 8);
-    const left = Math.min(maxLeft, Math.max(8, event.clientX - findDragState.offsetX));
-    const top = Math.min(maxTop, Math.max(48, event.clientY - findDragState.offsetY));
-    popover.style.left = `${left}px`;
-    popover.style.top = `${top}px`;
+    if (!rightSidebarResizeState || event.pointerId !== rightSidebarResizeState.pointerId) return;
+    setRightSidebarWidth(window.innerWidth - event.clientX);
   });
   const stopDrag = (event: PointerEvent) => {
-    if (findDragState?.pointerId !== event.pointerId) return;
-    findDragState = null;
-    popover.classList.remove("dragging");
+    if (rightSidebarResizeState?.pointerId !== event.pointerId) return;
+    rightSidebarResizeState = null;
+    document.body.classList.remove("resizing-sidebar");
     if (handle.hasPointerCapture(event.pointerId)) {
       handle.releasePointerCapture(event.pointerId);
     }
+    scheduleSessionSave();
   };
   handle.addEventListener("pointerup", stopDrag);
   handle.addEventListener("pointercancel", stopDrag);
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setRightSidebarWidth(state.rightSidebarWidth + (event.key === "ArrowLeft" ? 20 : -20));
+    scheduleSessionSave();
+  });
+}
+
+function setRightSidebarWidth(width: number) {
+  const maxWidth = Math.max(320, Math.floor(window.innerWidth * 0.55));
+  state.rightSidebarWidth = Math.min(maxWidth, Math.max(320, Math.round(width)));
+  $("app").style.setProperty("--right-sidebar-width", `${state.rightSidebarWidth}px`);
+  requestEditorLayout();
 }
 
 function bindWindowCloseGuard() {
@@ -1732,6 +1807,7 @@ function createDocument(
     doc.fileSize = new Blob([doc.text]).size;
     state.searchRevision += 1;
     renderChrome();
+    renderMarkdownOutline();
     scheduleMarkdownPreviewRender();
     scheduleSessionSave();
   });
@@ -1762,8 +1838,7 @@ function activateDocument(id: number) {
   const doc = state.documents.find((item) => item.id === id);
   if (!doc) return;
   state.activeId = id;
-  editor.setModel(doc.model);
-  applyEditorPerformanceProfile(doc);
+  attachEditorModel(doc);
   renderAll();
   scheduleSessionSave();
 }
@@ -1884,6 +1959,7 @@ function setWorkMode(mode: WorkMode) {
   }
   renderWorkspace();
   renderChrome();
+  renderRightSidebar();
   renderSettingsMenu();
   scheduleSessionSave();
 }
@@ -1901,19 +1977,46 @@ async function chooseWorkspace() {
     request: { defaultDir: preferredWorkspaceDialogDirectory() },
   });
   if (!path) return;
+  await openWorkspacePath(path);
+}
+
+async function openWorkspacePath(path: string) {
   const workspace = await withBusy(`读取目录 ${fileNameFromPath(path)}`, () =>
     invoke<WorkspaceDto>("read_workspace", { path }),
   );
   state.workspace = workspace;
   state.mode = "workspace";
   state.showDirectory = true;
-  state.collapsedDirs.clear();
+  state.collapsedDirs = new Set(
+    workspace.items.filter((item) => item.isDir).map((item) => item.path),
+  );
   ($("directoryInput") as HTMLInputElement).value = workspace.root;
   renderWorkspace();
   renderChrome();
+  renderRightSidebar();
   renderSettingsMenu();
+  rememberRecentWorkspace(workspace.root);
   scheduleSessionSave();
   log(`工作目录 ${workspace.name}`);
+}
+
+function closeWorkspace() {
+  if (!state.workspace) return;
+  const name = state.workspace.name;
+  state.workspace = null;
+  state.mode = "single";
+  state.showDirectory = false;
+  state.collapsedDirs.clear();
+  ($("directoryInput") as HTMLInputElement).value = "";
+  state.replacePreview = null;
+  state.replacePreviewApplied = false;
+  resetSearchResults();
+  if (isWorkspaceFindView()) setFindView("find", false);
+  if (state.rightTool === "search" && !$("findPopover").classList.contains("hidden")) closeRightSidebar();
+  renderAll();
+  renderSettingsMenu();
+  scheduleSessionSave();
+  log(`已关闭工作区 ${name}`);
 }
 
 async function refreshWorkspace() {
@@ -2550,7 +2653,7 @@ function setSearchResults(
   report: SearchReportDto,
   scope: SearchScope,
   activeIndex = report.total > 0 ? 0 : -1,
-  showPanel = false,
+  _showPanel = false,
 ) {
   state.results = report;
   state.searchScope = scope;
@@ -2558,8 +2661,15 @@ function setSearchResults(
   state.searchSignature = currentSearchSignature(scope);
   state.activeResultIndex = activeIndex;
   state.panel = "results";
-  state.showBottom = showPanel;
-  renderBottom();
+  if (scope === "workspace") {
+    setRightTool("search");
+    $("findPopover").classList.remove("hidden");
+    $("app").classList.add("right-sidebar-open");
+    setRightSidebarWidth(state.rightSidebarWidth);
+    renderRightSidebarToggle();
+  }
+  renderSearchSidebarResults();
+  renderCurrentFindCount();
   renderSearchDecorations();
 }
 
@@ -2591,7 +2701,7 @@ function currentSearchSignature(scope = state.searchScope ?? "current") {
     const doc = activeDocument();
     bits.push(doc.path || doc.title);
   }
-  if (scope === "open" || scope === "mark") {
+  if (scope === "open") {
     bits.push(state.documents.map((doc) => `${doc.id}:${doc.path || doc.title}:${doc.model.getVersionId()}`).join("|"));
   }
   if (scope === "workspace") {
@@ -2669,7 +2779,8 @@ async function openSearchResult(index: number) {
     : Math.min(items.length - 1, Math.max(0, index));
   const item = items[normalized];
   state.activeResultIndex = normalized;
-  renderBottom();
+  renderSearchSidebarResults();
+  renderCurrentFindCount();
   await openResult(item.path, item.match.line, item.match.column);
   renderSearchDecorations();
   scrollActiveResultIntoView();
@@ -2685,71 +2796,9 @@ function searchDirection() {
 }
 
 function scrollActiveResultIntoView() {
-  $("panelBody")
-    .querySelector<HTMLElement>(`tr[data-result-index="${state.activeResultIndex}"]`)
+  $("findResultsBody")
+    .querySelector<HTMLElement>(`[data-result-index="${state.activeResultIndex}"]`)
     ?.scrollIntoView({ block: "nearest" });
-}
-
-function markCurrentFile() {
-  const query = ($("findInput") as HTMLInputElement).value;
-  if (!query) {
-    log("标记内容不能为空");
-    return;
-  }
-  commitSearchHistory();
-  const doc = activeDocument();
-  const matches = modelMatches(doc);
-  setSearchResults({
-    total: matches.length,
-    skipped: [],
-    hits: [
-      {
-        path: doc.path || doc.title,
-        fileName: doc.title,
-        encoding: doc.encoding,
-        matches,
-      },
-    ],
-  }, "mark", -1);
-  log(`当前文件标记 ${matches.length} 处`);
-}
-
-function markOpenDocuments() {
-  const query = ($("findInput") as HTMLInputElement).value;
-  if (!query) {
-    log("标记内容不能为空");
-    return;
-  }
-  commitSearchHistory();
-  const hits = state.documents
-    .map((doc) => ({
-      path: doc.path || doc.title,
-      fileName: doc.title,
-      encoding: doc.encoding,
-      matches: modelMatches(doc),
-    }))
-    .filter((hit) => hit.matches.length > 0);
-  const report = {
-    hits,
-    skipped: [],
-    total: hits.reduce((sum, hit) => sum + hit.matches.length, 0),
-  };
-  setSearchResults(report, "mark", -1);
-  log(`打开文档标记 ${report.total} 处`);
-}
-
-function clearSearchMarks() {
-  state.results = null;
-  state.replacePreview = null;
-  state.replacePreviewApplied = false;
-  state.searchScope = null;
-  state.searchQuery = "";
-  state.searchSignature = "";
-  state.activeResultIndex = -1;
-  searchDecorations?.clear();
-  activeSearchDecoration?.clear();
-  renderBottom();
-  log("已清除搜索标记");
 }
 
 function clearSearchResults() {
@@ -2765,13 +2814,14 @@ function resetSearchResults() {
   state.activeResultIndex = -1;
   searchDecorations?.clear();
   activeSearchDecoration?.clear();
-  renderBottom();
+  renderSearchSidebarResults();
+  renderCurrentFindCount();
 }
 
 function clearReplacePreview() {
   state.replacePreview = null;
   state.replacePreviewApplied = false;
-  renderBottom();
+  renderSearchSidebarResults();
   log("已清除替换预览");
 }
 
@@ -2957,8 +3007,11 @@ async function previewWorkspaceReplace() {
   state.replacePreview = preview;
   state.replacePreviewApplied = false;
   state.panel = "preview";
-  state.showBottom = true;
-  renderBottom();
+  setRightTool("search");
+  $("findPopover").classList.remove("hidden");
+  $("app").classList.add("right-sidebar-open");
+  renderRightSidebarToggle();
+  renderSearchSidebarResults();
   log(`替换预览 ${preview.total} 处修改`);
 }
 
@@ -2990,7 +3043,7 @@ async function applyWorkspaceReplace() {
   state.replacePreviewApplied = true;
   await refreshOpenDocumentsAfterReplace(applied);
   state.panel = "preview";
-  renderBottom();
+  renderSearchSidebarResults();
   log(`目录替换已写入 ${applied.total} 处`);
 }
 
@@ -3296,11 +3349,12 @@ function renderAll() {
   renderMenus();
   renderWorkspace();
   renderChrome();
-  renderBottom();
   renderMarkdownPreview();
   renderSearchDecorations();
   renderHistoryLists();
   renderRecentFiles();
+  renderRightSidebar();
+  requestEditorLayout();
 }
 
 function renderChrome() {
@@ -3341,9 +3395,10 @@ function renderChrome() {
   $<HTMLButtonElement>("menuUppercaseButton").disabled = doc.readOnly;
   $<HTMLButtonElement>("menuLowercaseButton").disabled = doc.readOnly;
   $<HTMLButtonElement>("menuMarkdownButton").disabled = $<HTMLButtonElement>("markdownPreviewButton").disabled;
+  $<HTMLButtonElement>("menuCloseWorkspaceButton").disabled = !state.workspace;
+  $("menuOutlineButton").classList.toggle("hidden", !isMarkdownLikeDocument(doc));
   $("menuWordWrapButton").classList.toggle("active", state.wordWrap);
   $("menuMarkdownButton").classList.toggle("active", isMarkdownPreviewEnabled(doc));
-  $("menuBottomButton").classList.toggle("active", state.showBottom);
   setThemeButton();
 
   const tabs = $("tabs");
@@ -3389,17 +3444,12 @@ function renderChrome() {
     tabs.appendChild(tab);
   }
 
-  const statusLeftItems = [
-    escapeHtml(doc.path || "未保存"),
-    languageLabel(doc.language),
-    doc.encoding,
-    doc.lineEnding,
-    doc.readOnly ? "只读" : "",
-    doc.encodingStatus,
-  ].filter(Boolean).map((item) => `<span>${item}</span>`).join(`<span class="dot"></span>`);
-  $("statusLeft").innerHTML = state.busyMessage
-    ? `<span class="busy-pill">${iconSvg("LoaderCircle")}${escapeHtml(state.busyMessage)}</span><span class="dot"></span>${statusLeftItems}`
-    : statusLeftItems;
+  $("statusBusy").innerHTML = state.busyMessage
+    ? `<span class="busy-pill">${iconSvg("LoaderCircle")}${escapeHtml(state.busyMessage)}</span>`
+    : "";
+  $("statusDocumentState").textContent = [doc.readOnly ? "只读" : "", doc.encodingStatus]
+    .filter(Boolean)
+    .join(" · ");
   $("statusRight").innerHTML = [
     `第 ${editor.getPosition()?.lineNumber ?? 1} 行，第 ${editor.getPosition()?.column ?? 1} 列`,
     `${doc.model.getLineCount()} 行`,
@@ -3420,16 +3470,16 @@ function renderWorkspace() {
     return;
   }
   $("workspaceTitle").textContent = state.workspace.name.toUpperCase();
+  renderWorkspaceTree();
+}
+
+function renderWorkspaceTree() {
+  if (!state.workspace) {
+    $("tree").innerHTML = `<div class="empty">鏈墦寮€鐩綍</div>`;
+    return;
+  }
   const activePath = activeDocument().path;
   $("tree").innerHTML = renderTreeRows(visibleTreeItems(state.workspace.items), activePath);
-  $("tree").querySelectorAll<HTMLButtonElement>(".tree-item.file").forEach((button) => {
-    button.addEventListener("click", () => void openPath(button.dataset.path ?? ""));
-    button.addEventListener("keydown", (event) => void handleTreeItemKeydown(button, event));
-  });
-  $("tree").querySelectorAll<HTMLButtonElement>(".tree-item.dir").forEach((button) => {
-    button.addEventListener("click", () => toggleDirectoryCollapse(button.dataset.path ?? ""));
-    button.addEventListener("keydown", (event) => void handleTreeItemKeydown(button, event));
-  });
 }
 
 function renderTreeRows(items: TreeItemDto[], activePath: string | null | undefined) {
@@ -3458,23 +3508,30 @@ function renderTreeRows(items: TreeItemDto[], activePath: string | null | undefi
 }
 
 function visibleTreeItems(items: TreeItemDto[]) {
-  const collapsedByDepth: boolean[] = [];
-  return items.filter((item) => {
-    collapsedByDepth.length = item.depth;
-    const hidden = collapsedByDepth.some(Boolean);
-    collapsedByDepth[item.depth] = item.isDir && state.collapsedDirs.has(item.path);
-    return !hidden;
-  });
+  const visible: TreeItemDto[] = [];
+  let collapsedDepth: number | null = null;
+  for (const item of items) {
+    if (collapsedDepth !== null && item.depth <= collapsedDepth) collapsedDepth = null;
+    if (collapsedDepth !== null) continue;
+    visible.push(item);
+    if (item.isDir && state.collapsedDirs.has(item.path)) collapsedDepth = item.depth;
+  }
+  return visible;
 }
 
 function toggleDirectoryCollapse(path: string) {
   if (!path) return;
   if (state.collapsedDirs.has(path)) {
+    state.workspace?.items.forEach((item) => {
+      if (item.isDir && item.path !== path && pathMatchesTarget(item.path, path, true)) {
+        state.collapsedDirs.add(item.path);
+      }
+    });
     state.collapsedDirs.delete(path);
   } else {
     state.collapsedDirs.add(path);
   }
-  renderWorkspace();
+  renderWorkspaceTree();
   scheduleSessionSave();
 }
 
@@ -3537,7 +3594,6 @@ function renderSettingsMenu() {
   setSegmentedValue("settingsWordWrapControl", state.wordWrap ? "on" : "off");
   setSegmentedValue("settingsMinimapControl", state.minimap ? "on" : "off");
   setSegmentedValue("settingsWhitespaceControl", state.renderWhitespace);
-  setSegmentedValue("settingsBottomControl", state.showBottom ? "on" : "off");
   setSegmentedValue("settingsMarkdownControl", state.showMarkdownPreview ? "on" : "off");
   setSegmentedValue("settingsModeControl", state.mode === "workspace" && state.workspace ? "workspace" : "single");
 }
@@ -3571,15 +3627,37 @@ function setFontInputValue(id: string, value: string, active: boolean) {
 
 function renderRecentFiles() {
   const list = $("recentList");
-  if (state.recentFiles.length === 0) {
-    list.innerHTML = `<div class="empty">暂无最近文件</div>`;
+  if (state.recentWorkspaces.length === 0 && state.recentFiles.length === 0) {
+    list.innerHTML = `<div class="empty">暂无最近打开记录</div>`;
     return;
   }
   list.innerHTML = "";
+  if (state.recentWorkspaces.length > 0) {
+    const title = document.createElement("div");
+    title.className = "menu-section-title";
+    title.textContent = "最近工作区";
+    list.appendChild(title);
+    for (const path of state.recentWorkspaces) {
+      const row = document.createElement("button");
+      row.className = "menu-row recent-workspace-row";
+      row.innerHTML = `<span>${iconSvg("FolderTree")}</span><strong>${escapeHtml(fileNameFromPath(path))}</strong><small>${escapeHtml(path)}</small>`;
+      row.addEventListener("click", () => {
+        closeMenus();
+        void openWorkspacePath(path);
+      });
+      list.appendChild(row);
+    }
+  }
+  if (state.recentFiles.length > 0) {
+    const title = document.createElement("div");
+    title.className = "menu-section-title";
+    title.textContent = "最近文件";
+    list.appendChild(title);
+  }
   for (const path of state.recentFiles) {
     const row = document.createElement("button");
     row.className = "menu-row";
-    row.innerHTML = `<span></span><strong>${escapeHtml(fileNameFromPath(path))}</strong><small>${escapeHtml(path)}</small>`;
+    row.innerHTML = `<span>${iconSvg("FileText")}</span><strong>${escapeHtml(fileNameFromPath(path))}</strong><small>${escapeHtml(path)}</small>`;
     row.addEventListener("click", () => {
       closeMenus();
       void openPath(path);
@@ -3705,68 +3783,95 @@ function normalizeLineEndings(text: string, lineEnding: string) {
   return normalized;
 }
 
-function renderBottom() {
-  $("app").classList.toggle("bottom-collapsed", !state.showBottom);
-  $("bottomPanel").classList.toggle("hidden", !state.showBottom);
-  document.querySelectorAll(".panel-tab").forEach((tab) => {
-    tab.classList.toggle("active", (tab as HTMLElement).dataset.panel === state.panel);
-  });
-  const body = $("panelBody");
-  if (state.panel === "logs") {
-    body.innerHTML = `<table><tbody>${state.logs.map((log) => `<tr><td>INFO</td><td>${escapeHtml(log)}</td></tr>`).join("")}</tbody></table>`;
-    return;
-  }
+function renderSearchSidebarResults() {
+  const body = $("findResultsBody");
+  const title = $("findResultsTitle");
+  const summary = $("findResultsSummary");
   if (state.panel === "preview") {
+    title.textContent = "替换预览";
     if (!state.replacePreview || state.replacePreview.total === 0) {
       if (state.replacePreview) {
-        body.innerHTML = `<div class="panel-actions"><button class="tool-button" id="clearReplacePreviewButton">${iconSvg("X")}<span>清除预览</span></button><span>${state.replacePreviewApplied ? "替换已完成，没有剩余预览项" : "没有可替换内容"}</span></div>`;
+        summary.textContent = state.replacePreviewApplied ? "替换已完成" : "没有可替换内容";
+        body.innerHTML = `<div class="find-result-empty"><button class="tool-button" id="clearReplacePreviewButton">${iconSvg("X")}<span>清除预览</span></button></div>`;
         $("clearReplacePreviewButton").addEventListener("click", clearReplacePreview);
       } else {
+        summary.textContent = "暂无结果";
         body.innerHTML = `<div class="empty">暂无替换预览</div>`;
       }
       return;
     }
     const replaceStatus = state.replacePreviewApplied ? "已写入" : "待确认";
-    const rows = state.replacePreview.items.flatMap((item) =>
-      item.matches.map(
-        (match) =>
-          `<tr data-path="${escapeAttr(item.path)}" data-line="${match.line}" data-column="${match.column}"><td><span class="tag">${replaceStatus}</span></td><td>${escapeHtml(item.fileName)}</td><td>${match.line}:${match.column}</td><td>${escapeHtml(match.matchedText)} → ${escapeHtml(($("replaceInput") as HTMLInputElement).value)}</td></tr>`,
-      ),
-    );
+    summary.textContent = `${state.replacePreview.total} 处 · ${state.replacePreview.items.length} 个文件`;
+    const groups = state.replacePreview.items.map((item) => {
+      const rows = item.matches.map((match) => `<button class="find-result-row" data-path="${escapeAttr(item.path)}" data-line="${match.line}" data-column="${match.column}"><span class="find-result-line">${match.line}:${match.column}</span><span class="find-result-preview">${escapeHtml(match.matchedText)} → ${escapeHtml(($("replaceInput") as HTMLInputElement).value)}</span></button>`).join("");
+      return `<section class="find-result-group"><header>${iconSvg("FileText")}<strong>${escapeHtml(item.fileName)}</strong><span>${item.matches.length} 处 · ${replaceStatus}</span></header><div>${rows}</div></section>`;
+    });
     const applyButton = state.replacePreviewApplied
       ? ""
       : `<button class="tool-button primary" id="applyReplaceButton">${iconSvg("Save")}<span>写入文件</span></button>`;
-    body.innerHTML = `<div class="panel-actions">${applyButton}<button class="tool-button" id="clearReplacePreviewButton">${iconSvg("X")}<span>清除预览</span></button><span>${state.replacePreviewApplied ? "已写入" : "待写入"} ${state.replacePreview.total} 处修改，${state.replacePreview.items.length} 个文件</span></div><table><thead><tr><th>动作</th><th>文件</th><th>位置</th><th>替换预览</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+    body.innerHTML = `<div class="find-result-actions">${applyButton}<button class="tool-button" id="clearReplacePreviewButton">${iconSvg("X")}<span>清除</span></button></div><div class="find-result-list">${groups.join("")}</div>`;
     $("applyReplaceButton")?.addEventListener("click", () => void applyWorkspaceReplace());
     $("clearReplacePreviewButton").addEventListener("click", clearReplacePreview);
-    body.querySelectorAll<HTMLTableRowElement>("tr[data-path]").forEach((row) => {
+    body.querySelectorAll<HTMLButtonElement>("[data-path]").forEach((row) => {
       row.addEventListener("click", () =>
         void openResult(row.dataset.path ?? "", Number(row.dataset.line ?? "1"), Number(row.dataset.column ?? "1")),
       );
     });
     return;
   }
+  title.textContent = "搜索结果";
   if (!state.results) {
+    summary.textContent = "暂无结果";
     body.innerHTML = `<div class="empty">暂无查找结果</div>`;
     return;
   }
   if (state.results.total === 0) {
-    body.innerHTML = `<div class="panel-actions"><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除结果</span></button><span>没有命中，可检查大小写、全词或文件过滤。</span></div>`;
+    summary.textContent = "0 处命中";
+    body.innerHTML = `<div class="find-result-empty"><span>没有命中，可检查大小写、全词或文件过滤。</span><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除</span></button></div>`;
     $("clearResultsButton").addEventListener("click", clearSearchResults);
     return;
   }
+  summary.textContent = `${state.results.total} 处 · ${state.results.hits.length} 个文件`;
   let resultIndex = 0;
-  const rows = state.results.hits.flatMap((hit) =>
-    hit.matches.map((match) => {
+  const groups = state.results.hits.map((hit) => {
+    const rows = hit.matches.map((match) => {
       const index = resultIndex;
       resultIndex += 1;
-      return `<tr class="${index === state.activeResultIndex ? "result-active" : ""}" data-result-index="${index}" data-path="${escapeAttr(hit.path)}" data-line="${match.line}" data-column="${match.column}"><td><span class="tag">${hit.path === activeDocument().path || hit.path === activeDocument().title ? "当前文件" : "目录"}</span></td><td>${escapeHtml(hit.fileName)}</td><td>${match.line}:${match.column}</td><td>${highlightMatchLine(match)}</td></tr>`;
-    }),
-  );
-  body.innerHTML = `<div class="panel-actions"><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除结果</span></button><span>${state.results.total} 处命中，${state.results.hits.length} 个文件</span></div><table><thead><tr><th>范围</th><th>文件</th><th>位置</th><th>预览</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+      return `<button class="find-result-row ${index === state.activeResultIndex ? "result-active" : ""}" data-result-index="${index}"><span class="find-result-line">${match.line}:${match.column}</span><span class="find-result-preview">${highlightMatchLine(match)}</span></button>`;
+    }).join("");
+    return `<section class="find-result-group"><header>${iconSvg("FileText")}<strong>${escapeHtml(hit.fileName)}</strong><span>${hit.matches.length} 处</span></header><div>${rows}</div></section>`;
+  });
+  body.innerHTML = `<div class="find-result-actions"><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除</span></button></div><div class="find-result-list">${groups.join("")}</div>`;
   $("clearResultsButton").addEventListener("click", clearSearchResults);
-  body.querySelectorAll<HTMLTableRowElement>("tr[data-path]").forEach((row) => {
+  body.querySelectorAll<HTMLButtonElement>("[data-result-index]").forEach((row) => {
     row.addEventListener("click", () => void openSearchResult(Number(row.dataset.resultIndex ?? "0")));
+  });
+}
+
+function renderMarkdownOutline() {
+  const list = $("outlineList");
+  const summary = $("outlineSummary");
+  if (!isMarkdownLikeDocument()) {
+    summary.textContent = "";
+    list.innerHTML = "";
+    return;
+  }
+  const headings = activeDocument().model.getLinesContent().flatMap((line, index) => {
+    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim());
+    if (!match) return [];
+    return [{ level: match[1].length, text: match[2].trim(), line: index + 1 }];
+  });
+  summary.textContent = headings.length > 0 ? `${headings.length} 个标题` : "暂无标题";
+  list.innerHTML = headings.length > 0
+    ? headings.map((heading) => `<button class="outline-row" data-outline-line="${heading.line}" style="--outline-level:${heading.level}"><span>${escapeHtml(heading.text)}</span><small>${heading.line}</small></button>`).join("")
+    : `<div class="empty">当前 Markdown 文档没有标题</div>`;
+  list.querySelectorAll<HTMLButtonElement>("[data-outline-line]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const lineNumber = Number(button.dataset.outlineLine ?? "1");
+      editor.setPosition({ lineNumber, column: 1 });
+      editor.revealLineInCenterIfOutsideViewport(lineNumber);
+      editor.focus();
+    });
   });
 }
 
@@ -3878,7 +3983,50 @@ function scheduleMarkdownPreviewRender() {
 }
 
 function requestEditorLayout() {
-  window.requestAnimationFrame(() => editor?.layout());
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      const container = $("editor");
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        editor?.layout({ width: Math.floor(rect.width), height: Math.floor(rect.height) });
+      } else {
+        editor?.layout();
+      }
+      editor?.render(true);
+    });
+  });
+}
+
+function restoreEditorSurface() {
+  const doc = activeDocument();
+  if (!doc || !editor) return;
+  const model = doc.model;
+  if (editor.getModel() !== model) {
+    editor.setModel(model);
+  } else {
+    // Re-bind the same model to force Monaco to remeasure after a 0-height first layout.
+    editor.setModel(null);
+    editor.setModel(model);
+  }
+  applyEditorPerformanceProfile(doc);
+  requestEditorLayout();
+}
+
+function attachEditorModel(doc: OpenDocument) {
+  // Setting a different model on an already-created editor can leave the view
+  // blank (no gutter, no text) until a later resize forces a fresh layout
+  // (e.g. opening Find with Ctrl+F). The follow-up requestEditorLayout runs in
+  // a rAF that can race Monaco's internal model-swap view setup, so the layout
+  // lands on a not-yet-ready view. Rebonding the model recreates the view
+  // synchronously within the same tick, guaranteeing the new model paints.
+  const changed = editor.getModel() !== doc.model;
+  editor.setModel(doc.model);
+  if (changed) {
+    editor.setModel(null);
+    editor.setModel(doc.model);
+  }
+  applyEditorPerformanceProfile(doc);
+  requestEditorLayout();
 }
 
 function syncMarkdownPreviewScroll() {
@@ -3896,7 +4044,7 @@ function isMarkdownPreviewEnabled(doc = activeDocument()) {
   return state.showMarkdownPreview && isMarkdownLikeDocument(doc);
 }
 
-function isMarkdownLikeDocument(doc: OpenDocument) {
+function isMarkdownLikeDocument(doc = activeDocument()) {
   if (isMarkdownLikeLanguage(doc.language)) return true;
   const name = (doc.path || doc.title).toLowerCase();
   return /\.(md|markdown|mdx|rmd)$/.test(name);
@@ -3907,7 +4055,8 @@ function isMarkdownLikeLanguage(language: string) {
 }
 
 function setFindView(view: FindView, persist = true) {
-  if (!["find", "replace", "workspace-find", "workspace-replace", "mark"].includes(view)) view = "find";
+  if (!["find", "replace", "workspace-find", "workspace-replace"].includes(view)) view = "find";
+  if ((view === "workspace-find" || view === "workspace-replace") && state.mode !== "workspace") view = "find";
   state.findView = view;
   $("findPopover").dataset.view = view;
   document.querySelectorAll<HTMLButtonElement>("[data-find-view]").forEach((button) => {
@@ -3929,8 +4078,8 @@ function setFindView(view: FindView, persist = true) {
   toggleAction("replaceAllCurrentButton", view === "replace");
   toggleAction("findWorkspaceButton", view === "workspace-find");
   toggleAction("previewWorkspaceReplaceButton", view === "workspace-replace");
-  toggleAction("markCurrentButton", view === "mark");
-  toggleAction("clearMarksButton", view === "mark");
+  renderCurrentFindMode();
+  renderSearchSidebarResults();
   if (persist) scheduleSessionSave();
 }
 
@@ -3946,24 +4095,161 @@ function toggleAction(id: string, visible: boolean) {
   $(id).classList.toggle("hidden", !visible);
 }
 
+function isWorkspaceFindView(view = state.findView) {
+  return view === "workspace-find" || view === "workspace-replace";
+}
+
 function toggleFindOpen(options: { prefillFromSelection?: boolean } = {}) {
-  const input = $("findInput") as HTMLInputElement;
+  const workspace = isWorkspaceFindView();
+  const input = $(workspace ? "findInput" : "currentFindInput") as HTMLInputElement;
+  if (!workspace) syncSearchControlsToCurrent();
   if (options.prefillFromSelection) {
     const selectedText = selectedEditorTextForFind();
     if (selectedText) {
       input.value = selectedText;
+      if (!workspace) syncCurrentFindControls();
       scheduleSessionSave();
     }
   }
-  $("findPopover").classList.remove("hidden");
+  if (isWorkspaceFindView()) {
+    $("currentFindDock").classList.add("hidden");
+    setRightTool("search");
+    $("findPopover").classList.remove("hidden");
+    $("app").classList.add("right-sidebar-open");
+    setRightSidebarWidth(state.rightSidebarWidth);
+    renderRightSidebar();
+    renderRightSidebarToggle();
+  } else {
+    $("currentFindDock").classList.remove("hidden");
+    renderCurrentFindMode();
+    requestEditorLayout();
+  }
   input.focus();
   input.select();
 }
 
+function syncSearchControlsToCurrent() {
+  ($("currentFindInput") as HTMLInputElement).value = ($("findInput") as HTMLInputElement).value;
+  ($("currentReplaceInput") as HTMLInputElement).value = ($("replaceInput") as HTMLInputElement).value;
+  ($("currentMatchCaseInput") as HTMLInputElement).checked = ($("matchCaseInput") as HTMLInputElement).checked;
+  ($("currentWholeWordInput") as HTMLInputElement).checked = ($("wholeWordInput") as HTMLInputElement).checked;
+  ($("currentRegexInput") as HTMLInputElement).checked = getSearchMode() === "regex";
+  renderCurrentFindMode();
+  renderCurrentFindCount();
+}
+
+function syncCurrentFindControls() {
+  ($("findInput") as HTMLInputElement).value = ($("currentFindInput") as HTMLInputElement).value;
+  ($("replaceInput") as HTMLInputElement).value = ($("currentReplaceInput") as HTMLInputElement).value;
+  ($("matchCaseInput") as HTMLInputElement).checked = ($("currentMatchCaseInput") as HTMLInputElement).checked;
+  ($("wholeWordInput") as HTMLInputElement).checked = ($("currentWholeWordInput") as HTMLInputElement).checked;
+  setSearchMode(($("currentRegexInput") as HTMLInputElement).checked ? "regex" : "literal");
+  scheduleSessionSave();
+}
+
+function renderCurrentFindMode() {
+  const replace = state.findView === "replace";
+  $("currentReplaceInput").classList.toggle("hidden", !replace);
+  $("currentReplaceButton").classList.toggle("hidden", !replace);
+  $("currentReplaceAllButton").classList.toggle("hidden", !replace);
+}
+
+function renderCurrentFindCount() {
+  const currentResults = state.searchScope === "current" ? state.results : null;
+  if (!currentResults || currentResults.total === 0) {
+    $("currentFindCount").textContent = "0 个结果";
+    return;
+  }
+  const active = state.activeResultIndex >= 0 ? state.activeResultIndex + 1 : 0;
+  $("currentFindCount").textContent = active > 0 ? `${active}/${currentResults.total}` : `${currentResults.total} 个结果`;
+}
+
 function closeFind() {
+  if (!$("currentFindDock").classList.contains("hidden")) {
+    $("currentFindDock").classList.add("hidden");
+    requestEditorLayout();
+    editor.focus();
+    return;
+  }
+  closeRightSidebar();
+}
+
+function closeRightSidebar() {
   $("findPopover").classList.add("hidden");
-  resetSearchResults();
+  $("app").classList.remove("right-sidebar-open");
+  renderRightSidebarToggle();
+  requestEditorLayout();
   editor.focus();
+}
+
+function toggleRightSidebar() {
+  if (!$("findPopover").classList.contains("hidden")) {
+    closeRightSidebar();
+    return;
+  }
+  const workspace = state.mode === "workspace" && Boolean(state.workspace);
+  const markdown = isMarkdownLikeDocument();
+  if (!workspace && !markdown) return;
+  if (workspace) {
+    setFindView(isWorkspaceFindView() ? state.findView : "workspace-find");
+    state.rightTool = "search";
+    $("currentFindDock").classList.add("hidden");
+  } else {
+    state.rightTool = "outline";
+  }
+  $("findPopover").classList.remove("hidden");
+  $("app").classList.add("right-sidebar-open");
+  setRightSidebarWidth(state.rightSidebarWidth);
+  renderRightSidebar();
+  renderRightSidebarToggle();
+  if (state.rightTool === "search") ($("findInput") as HTMLInputElement).focus();
+}
+
+function renderRightSidebarToggle() {
+  const available = (state.mode === "workspace" && Boolean(state.workspace)) || isMarkdownLikeDocument();
+  const open = !$("findPopover").classList.contains("hidden");
+  const button = $<HTMLButtonElement>("rightSidebarToggleButton");
+  button.classList.toggle("hidden", !available);
+  const label = open ? "收起右侧栏" : "打开右侧工具栏";
+  button.classList.toggle("active", open);
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.innerHTML = iconSvg(open ? "PanelRightClose" : "PanelRightOpen");
+}
+
+function setRightTool(tool: RightTool) {
+  if (tool === "outline" && !isMarkdownLikeDocument()) tool = "search";
+  state.rightTool = tool;
+  renderRightSidebar();
+}
+
+function openMarkdownOutline() {
+  if (!isMarkdownLikeDocument()) return;
+  state.rightTool = "outline";
+  $("findPopover").classList.remove("hidden");
+  $("app").classList.add("right-sidebar-open");
+  setRightSidebarWidth(state.rightSidebarWidth);
+  renderRightSidebar();
+  renderRightSidebarToggle();
+}
+
+function renderRightSidebar() {
+  const markdown = isMarkdownLikeDocument();
+  const workspace = state.mode === "workspace" && Boolean(state.workspace);
+  $("rightSearchToolButton").classList.toggle("hidden", !workspace);
+  $("rightOutlineToolButton").classList.toggle("hidden", !markdown);
+  document.querySelectorAll<HTMLElement>(".workspace-find-view").forEach((button) => {
+    button.classList.toggle("hidden", !workspace);
+  });
+  if (!workspace && state.rightTool === "search") state.rightTool = markdown ? "outline" : "search";
+  if (!markdown && state.rightTool === "outline") state.rightTool = workspace ? "search" : "outline";
+  $("rightSearchToolButton").classList.toggle("active", state.rightTool === "search");
+  $("rightOutlineToolButton").classList.toggle("active", state.rightTool === "outline");
+  if (isWorkspaceFindView()) $("searchToolPane").classList.toggle("hidden", state.rightTool !== "search");
+  $("outlineToolPane").classList.toggle("hidden", state.rightTool !== "outline");
+  renderSearchSidebarResults();
+  renderMarkdownOutline();
+  renderRightSidebarToggle();
 }
 
 function selectedEditorTextForFind() {
@@ -3975,19 +4261,27 @@ function selectedEditorTextForFind() {
   return normalized.slice(0, 300);
 }
 
-function toggleBottom() {
-  state.showBottom = !state.showBottom;
-  renderBottom();
-  renderSettingsMenu();
-  scheduleSessionSave();
-}
-
 function toggleMenu(id: "languageMenu" | "encodingMenu" | "lineEndingMenu" | "recentMenu") {
   const menu = $(id);
   const open = menu.classList.contains("hidden");
   closeMenus();
   closeFontDropdowns();
   menu.classList.toggle("hidden", !open);
+  if (open && id !== "recentMenu") {
+    const triggerId = id === "languageMenu"
+      ? "languageButton"
+      : id === "encodingMenu"
+        ? "encodingButton"
+        : "lineEndingButton";
+    const trigger = $<HTMLButtonElement>(triggerId);
+    const rect = trigger.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth || (id === "languageMenu" ? 430 : 360);
+    menu.style.top = "auto";
+    menu.style.right = "auto";
+    menu.style.bottom = `${Math.max(34, window.innerHeight - rect.top + 4)}px`;
+    menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
+    trigger.setAttribute("aria-expanded", "true");
+  }
   if (open && id === "languageMenu") {
     const input = $("languageSearchInput") as HTMLInputElement;
     input.focus();
@@ -4135,8 +4429,9 @@ function renderCommandList(query: string) {
   const commands = [
     ["新建文件", newDocument],
     ["打开文件", () => void openDocument()],
-    ["打开最近文件", () => toggleMenu("recentMenu")],
+    ["最近打开", () => toggleMenu("recentMenu")],
     ["打开目录", () => void chooseWorkspace()],
+    ["关闭工作区", closeWorkspace],
     ["单文件模式", () => setWorkMode("single")],
     ["文件夹模式", () => void enterWorkspaceMode()],
     ["保存", () => void saveActive()],
@@ -4229,13 +4524,15 @@ async function restoreSession() {
   try {
     const snapshot = JSON.parse(raw) as Partial<SessionSnapshot>;
     state.recentFiles = uniquePaths(snapshot.recentFiles ?? []).slice(0, 40);
+    state.recentWorkspaces = uniquePaths(snapshot.recentWorkspaces ?? []).slice(0, 20);
     state.collapsedDirs = new Set(snapshot.collapsedDirs ?? []);
     state.searchHistory = (snapshot.searchHistory ?? []).slice(0, 30);
     state.replaceHistory = (snapshot.replaceHistory ?? []).slice(0, 30);
     state.searchFavorites = (snapshot.searchFavorites ?? []).slice(0, 30);
     state.findView = snapshot.findView ?? "find";
     state.mode = snapshot.workMode ?? (snapshot.workspaceRoot ? "workspace" : "single");
-    state.showBottom = snapshot.showBottom ?? state.showBottom;
+    state.rightSidebarWidth = snapshot.rightSidebarWidth ?? state.rightSidebarWidth;
+    setRightSidebarWidth(state.rightSidebarWidth);
     state.markdownPreviewPreferenceSet = snapshot.markdownPreviewPreferenceSet ?? false;
     state.showMarkdownPreview = state.markdownPreviewPreferenceSet
       ? snapshot.showMarkdownPreview ?? state.showMarkdownPreview
@@ -4295,10 +4592,9 @@ async function restoreSession() {
       restoredDraftCount += 1;
     }
 
-    const initial = state.documents.find((doc) => !doc.path && doc.title === "Untitled-1.txt" && !doc.dirty);
-    if (restoredCount + restoredDraftCount > 0 && initial && state.documents.length > 1) {
-      state.documents = state.documents.filter((doc) => doc !== initial);
-      initial.model.dispose();
+  const placeholder = state.documents.find((doc) => !doc.path && doc.title === "Untitled-1.txt" && !doc.dirty);
+    if (restoredCount + restoredDraftCount > 0 && placeholder && state.documents.length > 1) {
+      state.documents = state.documents.filter((doc) => doc !== placeholder);
     }
     const active = snapshot.activePath
       ? state.documents.find((doc) => doc.path === snapshot.activePath)
@@ -4309,7 +4605,12 @@ async function restoreSession() {
     if (!state.documents.some((doc) => doc.id === state.activeId)) {
       state.activeId = state.documents[0].id;
     }
+    // Switch model first so the disposed placeholder is never left attached to the editor.
     editor.setModel(activeDocument().model);
+    applyEditorPerformanceProfile(activeDocument());
+    if (placeholder && !state.documents.includes(placeholder)) {
+      placeholder.model.dispose();
+    }
 
     renderAll();
     log(`会话已恢复：${restoredCount} 个文件，${restoredDraftCount} 个临时文件`);
@@ -4317,6 +4618,13 @@ async function restoreSession() {
     log(`会话恢复失败：${String(error)}`);
   } finally {
     state.restoring = false;
+    // Force a layout after shell chrome settles; Monaco can paint blank if height was 0 at create.
+    window.requestAnimationFrame(() => {
+      restoreEditorSurface();
+      requestEditorLayout();
+    });
+    window.setTimeout(requestEditorLayout, 120);
+    window.setTimeout(requestEditorLayout, 360);
     scheduleSessionSave();
   }
 }
@@ -4415,6 +4723,7 @@ function saveSession() {
     openFiles: uniquePaths(state.documents.flatMap((doc) => (doc.path ? [doc.path] : []))),
     draftDocuments: draftDocumentSnapshots(),
     recentFiles: uniquePaths(state.recentFiles).slice(0, 40),
+    recentWorkspaces: uniquePaths(state.recentWorkspaces).slice(0, 20),
     workspaceRoot: state.workspace?.root ?? null,
     workMode: state.mode,
     showDirectory: state.showDirectory,
@@ -4422,7 +4731,7 @@ function saveSession() {
     activePath: active?.path ?? null,
     activeDraftId: active && !active.path ? ensureDraftId(active) : null,
     darkMode: state.darkMode,
-    showBottom: state.showBottom,
+    rightSidebarWidth: state.rightSidebarWidth,
     showMarkdownPreview: state.showMarkdownPreview,
     markdownPreviewPreferenceSet: state.markdownPreviewPreferenceSet,
     searchHistory: state.searchHistory.slice(0, 30),
@@ -4460,8 +4769,15 @@ function rememberRecentPath(path: string) {
   scheduleSessionSave();
 }
 
+function rememberRecentWorkspace(path: string) {
+  state.recentWorkspaces = [path, ...state.recentWorkspaces.filter((item) => item !== path)].slice(0, 20);
+  renderRecentFiles();
+  scheduleSessionSave();
+}
+
 function clearRecentFiles() {
   state.recentFiles = [];
+  state.recentWorkspaces = [];
   renderRecentFiles();
   scheduleSessionSave();
 }
@@ -4885,7 +5201,7 @@ async function pickSavePath(doc: OpenDocument) {
 
 function preferredWorkspaceDialogDirectory() {
   const inputValue = ($("directoryInput") as HTMLInputElement).value.trim();
-  return inputValue || state.workspace?.root || preferredDialogDirectory();
+  return inputValue || state.workspace?.root || state.recentWorkspaces[0] || preferredDialogDirectory();
 }
 
 function preferredDialogDirectory(doc = activeDocument()) {
@@ -4960,7 +5276,6 @@ function highlightMatchLine(match: TextMatchDto) {
 function log(message: string) {
   state.logs.unshift(`${new Date().toLocaleTimeString()}  ${message}`);
   state.logs = state.logs.slice(0, 200);
-  renderBottom();
 }
 
 function escapeHtml(value: string) {

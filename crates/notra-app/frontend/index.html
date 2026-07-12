@@ -4,8 +4,64 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Notra</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+      }
+
+      body {
+        background: #e8eef6;
+        overflow: hidden;
+      }
+
+      body.booting #app {
+        visibility: hidden;
+      }
+
+      .boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-items: center;
+        color: #334155;
+        background: #e8eef6;
+        font: 600 13px "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif;
+      }
+
+      .boot-card {
+        display: grid;
+        justify-items: center;
+        gap: 12px;
+      }
+
+      .boot-mark {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+        display: grid;
+        place-items: center;
+        color: #ffffff;
+        background: #3238d8;
+        font-size: 18px;
+        font-weight: 800;
+      }
+
+      body:not(.booting) .boot-splash {
+        display: none;
+      }
+    </style>
   </head>
-  <body>
+  <body class="booting">
+    <div class="boot-splash" id="bootSplash" aria-hidden="true">
+      <div class="boot-card">
+        <div class="boot-mark">N</div>
+        <div>正在启动 Notra</div>
+      </div>
+    </div>
     <main id="app">
       <header class="titlebar" id="windowTitlebar">
         <section class="brand">
@@ -44,7 +100,7 @@
         <div class="tool-group primary-actions" aria-label="常用工具">
           <button class="tool-button" id="newButton" aria-label="新建 Ctrl+N" title="新建 Ctrl+N" aria-keyshortcuts="Control+N"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
           <button class="tool-button" id="openButton" aria-label="打开文件 Ctrl+O" title="打开文件 Ctrl+O" aria-keyshortcuts="Control+O"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
-          <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近文件" title="最近文件" aria-haspopup="menu"><span class="icon-slot" data-icon="History"></span><span data-label>最近文件</span></button>
+          <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近打开" title="最近打开" aria-haspopup="menu"><span class="icon-slot" data-icon="History"></span><span data-label>最近打开</span></button>
           <button class="tool-button" id="workspaceButton" aria-label="工作区模式" title="工作区模式"><span class="icon-slot" data-icon="FolderTree"></span><span data-label>工作区模式</span></button>
           <button class="tool-button" id="singleModeButton" aria-label="单文件模式" title="单文件模式"><span class="icon-slot" data-icon="File"></span><span data-label>单文件模式</span></button>
           <span class="tool-divider"></span>
@@ -66,19 +122,15 @@
           <button class="tool-button" id="markdownPreviewButton" aria-label="Markdown 分屏预览" title="Markdown 分屏预览" aria-pressed="false"><span class="icon-slot" data-icon="FileText"></span><span data-label>Markdown 分屏预览</span></button>
         </div>
 
-        <div class="tool-group right">
-          <button class="tool-button meta" id="languageButton" data-menu-trigger aria-label="语言 Plain Text" title="语言 Plain Text"><span class="icon-slot" data-icon="Braces"></span><span data-label>语言: Plain Text</span><span class="icon-slot chevron" data-icon="ChevronDown"></span></button>
-          <button class="tool-button meta" id="encodingButton" data-menu-trigger aria-label="编码 UTF-8" title="编码 UTF-8"><span class="icon-slot" data-icon="Binary"></span><span data-label>UTF-8</span><span class="icon-slot chevron" data-icon="ChevronDown"></span></button>
-          <button class="tool-button meta" id="lineEndingButton" data-menu-trigger aria-label="行尾 LF" title="行尾 LF"><span class="icon-slot" data-icon="Pilcrow"></span><span data-label>LF</span><span class="icon-slot chevron" data-icon="ChevronDown"></span></button>
-        </div>
       </nav>
 
       <section class="popover app-menu hidden" id="fileMenu" role="menu" aria-label="文件菜单">
         <div class="menu-list">
           <button class="menu-row" id="menuNewButton" role="menuitem"><span class="icon-slot" data-icon="FilePlus2"></span><strong>新建</strong><small>Ctrl+N</small></button>
           <button class="menu-row" id="menuOpenButton" role="menuitem"><span class="icon-slot" data-icon="FolderOpen"></span><strong>打开文件</strong><small>Ctrl+O</small></button>
-          <button class="menu-row" id="menuRecentButton" role="menuitem"><span class="icon-slot" data-icon="History"></span><strong>最近文件</strong><small></small></button>
+          <button class="menu-row" id="menuRecentButton" role="menuitem"><span class="icon-slot" data-icon="History"></span><strong>最近打开</strong><small></small></button>
           <button class="menu-row" id="menuWorkspaceButton" role="menuitem"><span class="icon-slot" data-icon="FolderTree"></span><strong>打开工作区</strong><small></small></button>
+          <button class="menu-row" id="menuCloseWorkspaceButton" role="menuitem"><span class="icon-slot" data-icon="FolderX"></span><strong>关闭工作区</strong><small></small></button>
           <div class="menu-divider"></div>
           <button class="menu-row" id="menuSaveButton" role="menuitem"><span class="icon-slot" data-icon="Save"></span><strong>保存</strong><small>Ctrl+S</small></button>
           <button class="menu-row" id="menuSaveAllButton" role="menuitem"><span class="icon-slot" data-icon="SaveAll"></span><strong>保存全部</strong><small></small></button>
@@ -116,24 +168,24 @@
         <div class="menu-list">
           <button class="menu-row" id="menuWordWrapButton" role="menuitem"><span class="icon-slot" data-icon="WrapText"></span><strong>自动换行</strong><small></small></button>
           <button class="menu-row" id="menuMarkdownButton" role="menuitem"><span class="icon-slot" data-icon="FileText"></span><strong>Markdown 分屏预览</strong><small></small></button>
-          <button class="menu-row" id="menuBottomButton" role="menuitem"><span class="icon-slot" data-icon="PanelBottom"></span><strong>底部面板</strong><small></small></button>
+          <button class="menu-row" id="menuOutlineButton" role="menuitem"><span class="icon-slot" data-icon="ListTree"></span><strong>Markdown 大纲</strong><small>Ctrl+Shift+O</small></button>
           <div class="menu-divider"></div>
           <button class="menu-row" id="menuThemeButton" role="menuitem"><span class="icon-slot" data-icon="Moon"></span><strong>切换主题</strong><small></small></button>
         </div>
       </section>
 
-      <section class="tabs" id="tabs"></section>
+      <section class="tabs" id="tabsBar">
+        <div class="tabs-list" id="tabs"></div>
+        <button class="tabs-sidebar-toggle" id="rightSidebarToggleButton" aria-label="打开搜索侧栏" title="打开搜索侧栏"><span class="icon-slot" data-icon="PanelRightOpen"></span></button>
+      </section>
 
       <section class="workspace" id="workspace">
         <aside class="activity-rail" id="activityRail">
           <button class="rail-button active" id="directoryToggle" aria-label="目录" title="目录">
-            <span class="icon-slot" data-icon="Files"></span>
+            <span class="icon-slot" data-icon="FolderTree"></span>
           </button>
           <button class="rail-button" id="findRailButton" aria-label="在文件中查找 Ctrl+Shift+F" title="在文件中查找 Ctrl+Shift+F" aria-keyshortcuts="Control+Shift+F">
             <span class="icon-slot" data-icon="Search"></span>
-          </button>
-          <button class="rail-button" id="bottomRailButton" aria-label="输出面板" title="输出面板">
-            <span class="icon-slot" data-icon="PanelBottom"></span>
           </button>
           <div class="rail-spacer"></div>
         </aside>
@@ -144,6 +196,7 @@
             <div class="explorer-actions">
               <button class="ghost-button icon-only" id="refreshDirectoryButton" aria-label="刷新目录" title="刷新目录"><span class="icon-slot" data-icon="RefreshCw"></span><span data-label>刷新目录</span></button>
               <button class="ghost-button icon-only" id="closeDirectoryButton" aria-label="收起目录" title="收起目录"><span class="icon-slot" data-icon="PanelLeftClose"></span><span data-label>收起目录</span></button>
+              <button class="ghost-button icon-only" id="closeWorkspaceButton" aria-label="关闭工作区" title="关闭工作区"><span class="icon-slot" data-icon="FolderX"></span></button>
             </div>
           </header>
           <div class="explorer-body" id="tree"></div>
@@ -151,6 +204,26 @@
 
         <section class="editor-area">
           <div class="editor-wrap">
+            <div class="current-find-dock hidden" id="currentFindDock">
+              <div class="current-find-bar">
+                <input id="currentFindInput" list="findHistoryList" aria-label="查找目标" placeholder="查找" />
+                <input class="hidden" id="currentReplaceInput" list="replaceHistoryDataList" aria-label="替换为" placeholder="替换为" />
+                <div class="current-find-options">
+                  <label title="匹配大小写"><input type="checkbox" id="currentMatchCaseInput" /><span>Aa</span></label>
+                  <label title="全词匹配"><input type="checkbox" id="currentWholeWordInput" /><span>W</span></label>
+                  <label title="正则表达式"><input type="checkbox" id="currentRegexInput" /><span>.*</span></label>
+                </div>
+                <span class="current-find-count" id="currentFindCount">0 个结果</span>
+                <div class="current-find-actions">
+                  <button id="currentFindPreviousButton" aria-label="查找上一个" title="查找上一个"><span class="icon-slot" data-icon="ArrowUp"></span></button>
+                  <button id="currentFindNextButton" aria-label="查找下一个" title="查找下一个"><span class="icon-slot" data-icon="ArrowDown"></span></button>
+                  <button id="currentFindAllButton" aria-label="查找全部" title="查找全部"><span class="icon-slot" data-icon="FileSearch"></span></button>
+                  <button class="hidden" id="currentReplaceButton" aria-label="替换当前" title="替换当前"><span class="icon-slot" data-icon="Replace"></span></button>
+                  <button class="hidden" id="currentReplaceAllButton" aria-label="全部替换" title="全部替换"><span class="icon-slot" data-icon="ReplaceAll"></span></button>
+                  <button id="closeCurrentFindButton" aria-label="关闭当前文件查找" title="关闭当前文件查找"><span class="icon-slot" data-icon="X"></span></button>
+                </div>
+              </div>
+            </div>
             <div id="editor"></div>
           </div>
           <aside class="markdown-preview hidden" id="markdownPreview"></aside>
@@ -170,7 +243,7 @@
 
       <section class="popover hidden" id="recentMenu">
         <header class="popover-head">
-          <strong>最近文件</strong>
+          <strong>最近打开</strong>
           <button class="ghost-button" id="clearRecentButton">清空</button>
         </header>
         <div class="menu-list" id="recentList"></div>
@@ -427,17 +500,6 @@
                 </div>
               </div>
               <div class="settings-row">
-                <span class="settings-row-icon icon-slot" data-icon="PanelBottom"></span>
-                <div>
-                  <strong>底部面板</strong>
-                  <span>当前文件查找结果和日志</span>
-                </div>
-                <div class="seg-control" id="settingsBottomControl">
-                  <button data-value="off">隐藏</button>
-                  <button data-value="on">显示</button>
-                </div>
-              </div>
-              <div class="settings-row">
                 <span class="settings-row-icon icon-slot" data-icon="FileText"></span>
                 <div>
                   <strong>Markdown 分屏预览</strong>
@@ -462,14 +524,14 @@
           <section class="settings-panel" data-settings-panel="search">
             <header class="settings-section-head">
               <strong>查找</strong>
-              <span>当前文档内查找、替换和标记</span>
+              <span>当前文件和工作区的查找与替换</span>
             </header>
             <div class="settings-list">
               <div class="settings-row">
                 <span class="settings-row-icon icon-slot" data-icon="Search"></span>
                 <div>
-                  <strong>查找面板</strong>
-                  <span>默认只在文档中高亮，按需展开结果</span>
+                  <strong>搜索侧栏</strong>
+                  <span>在右侧查看匹配预览并快速跳转</span>
                 </div>
                 <button class="settings-action" id="settingsOpenFindButton">打开</button>
               </div>
@@ -547,30 +609,37 @@
         <div class="command-list" id="commandList"></div>
       </section>
 
-      <section class="find-popover hidden" id="findPopover" role="dialog" aria-modal="false" aria-label="查找和替换">
-        <div class="segmented find-drag-handle" id="findDragHandle" title="拖动查找框">
-          <button class="seg active" data-find-view="find">查找</button>
-          <button class="seg" data-find-view="replace">替换</button>
-          <button class="seg" data-find-view="workspace-find">文件查找</button>
-          <button class="seg" data-find-view="workspace-replace">文件替换</button>
-          <button class="seg" data-find-view="mark">标记</button>
-        </div>
-        <div class="find-body">
-          <div class="field-stack">
-            <label><span>查找目标</span><input id="findInput" list="findHistoryList" /></label>
-            <label><span>替换为</span><input id="replaceInput" list="replaceHistoryDataList" /></label>
+      <section class="find-popover right-sidebar hidden" id="findPopover" aria-label="右侧工具栏">
+        <div class="right-sidebar-resize" id="rightSidebarResize" role="separator" aria-orientation="vertical" aria-label="调整右侧栏宽度" tabindex="0"></div>
+        <header class="right-tool-tabs">
+          <button class="right-tool-tab active" id="rightSearchToolButton" data-right-tool="search"><span class="icon-slot" data-icon="Search"></span><span>文件查找</span></button>
+          <button class="right-tool-tab hidden" id="rightOutlineToolButton" data-right-tool="outline"><span class="icon-slot" data-icon="ListTree"></span><span>大纲</span></button>
+          <span class="right-tool-spacer"></span>
+        </header>
+        <div class="right-search-dock" id="rightSearchDock">
+        <div class="right-tool-pane" id="searchToolPane">
+          <div class="segmented find-view-tabs">
+            <button class="seg current-find-view active" data-find-view="find">查找</button>
+            <button class="seg current-find-view" data-find-view="replace">替换</button>
+            <button class="seg workspace-find-view" data-find-view="workspace-find">文件查找</button>
+            <button class="seg workspace-find-view" data-find-view="workspace-replace">文件替换</button>
+          </div>
+          <div class="find-body">
+            <div class="field-stack">
+            <label class="find-query-row"><span>查找目标</span><input id="findInput" list="findHistoryList" /></label>
+            <label class="replace-query-row"><span>替换为</span><input id="replaceInput" list="replaceHistoryDataList" /></label>
             <div class="checks find-flags">
-              <label><input type="checkbox" id="reverseSearchInput" />反向查找</label>
-              <label><input type="checkbox" id="wholeWordInput" />全词匹配</label>
-              <label><input type="checkbox" id="matchCaseInput" />匹配大小写</label>
-              <label><input type="checkbox" id="wrapSearchInput" checked />循环查找</label>
-              <label><input type="checkbox" id="searchSelectionInput" />选取范围内</label>
+              <label class="reverse-option" data-short="←" title="反向查找"><input type="checkbox" id="reverseSearchInput" /><span>反向查找</span></label>
+              <label class="whole-word-option" data-short="W" title="全词匹配"><input type="checkbox" id="wholeWordInput" /><span>全词匹配</span></label>
+              <label class="match-case-option" data-short="Aa" title="匹配大小写"><input type="checkbox" id="matchCaseInput" /><span>匹配大小写</span></label>
+              <label class="wrap-option" data-short="循" title="循环查找"><input type="checkbox" id="wrapSearchInput" checked /><span>循环查找</span></label>
+              <label class="selection-option" data-short="选" title="选取范围内"><input type="checkbox" id="searchSelectionInput" /><span>选取范围内</span></label>
             </div>
             <fieldset class="search-mode-field" id="searchModeInput">
               <legend>查找模式</legend>
-              <label><input type="radio" name="searchMode" value="literal" checked />普通</label>
-              <label><input type="radio" name="searchMode" value="extended" />扩展</label>
-              <label><input type="radio" name="searchMode" value="regex" />正则表达式</label>
+              <label class="literal-mode" data-short="文本"><input type="radio" name="searchMode" value="literal" checked /><span>普通</span></label>
+              <label class="extended-mode" data-short="扩展"><input type="radio" name="searchMode" value="extended" /><span>扩展</span></label>
+              <label class="regex-mode" data-short=".*"><input type="radio" name="searchMode" value="regex" /><span>正则表达式</span></label>
             </fieldset>
             <datalist id="findHistoryList"></datalist>
             <datalist id="replaceHistoryDataList"></datalist>
@@ -583,35 +652,37 @@
                 <label><input type="checkbox" id="includeHiddenInput" />包含隐藏文件</label>
               </div>
             </div>
+            </div>
+            <div class="action-stack">
+              <button class="primary" id="findNextButton"><span class="icon-slot" data-icon="ArrowDown"></span><span>下一个</span></button>
+              <button id="findPreviousButton"><span class="icon-slot" data-icon="ArrowUp"></span><span>上一个</span></button>
+              <button id="findCurrentButton"><span class="icon-slot" data-icon="FileSearch"></span><span>全部查找</span></button>
+              <button id="replaceCurrentButton"><span class="icon-slot" data-icon="Replace"></span><span>替换当前</span></button>
+              <button id="replaceAllCurrentButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>全部替换</span></button>
+              <button class="primary" id="findWorkspaceButton"><span class="icon-slot" data-icon="Files"></span><span>在文件中查找</span></button>
+              <button class="primary" id="previewWorkspaceReplaceButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>预览全部替换</span></button>
+            </div>
           </div>
-          <div class="action-stack">
-            <button class="primary" id="findNextButton"><span class="icon-slot" data-icon="ArrowDown"></span><span>查找下一个</span></button>
-            <button id="findPreviousButton"><span class="icon-slot" data-icon="ArrowUp"></span><span>查找上一个</span></button>
-            <button id="findCurrentButton"><span class="icon-slot" data-icon="FileSearch"></span><span>当前文件中查找</span></button>
-            <button id="replaceCurrentButton"><span class="icon-slot" data-icon="Replace"></span><span>替换当前</span></button>
-            <button id="replaceAllCurrentButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>全部替换</span></button>
-            <button class="primary" id="findWorkspaceButton"><span class="icon-slot" data-icon="Files"></span><span>在文件中查找</span></button>
-            <button class="primary" id="previewWorkspaceReplaceButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>预览全部替换</span></button>
-            <button id="markCurrentButton"><span class="icon-slot" data-icon="Highlighter"></span><span>标记当前</span></button>
-            <button id="clearMarksButton"><span class="icon-slot" data-icon="Eraser"></span><span>清除标记</span></button>
-            <button id="closeFindButton"><span class="icon-slot" data-icon="CircleX"></span><span>取消</span></button>
-          </div>
+          <section class="find-results-pane" aria-label="搜索结果">
+            <header><strong id="findResultsTitle">搜索结果</strong><span id="findResultsSummary">暂无结果</span></header>
+            <div class="find-results-body" id="findResultsBody"></div>
+          </section>
+        </div>
+        </div>
+        <div class="right-tool-pane hidden" id="outlineToolPane">
+          <header class="outline-head"><strong>Markdown 大纲</strong><span id="outlineSummary"></span></header>
+          <nav class="outline-list" id="outlineList" aria-label="Markdown 大纲"></nav>
         </div>
       </section>
 
-      <section class="bottom-panel" id="bottomPanel">
-        <header class="panel-head">
-          <div class="panel-tabs">
-            <button class="panel-tab active" data-panel="results">查找结果</button>
-            <button class="panel-tab" data-panel="logs">日志</button>
-          </div>
-          <button class="tool-button" id="collapseBottomButton" aria-label="收起底部面板" title="收起底部面板"><span class="icon-slot" data-icon="PanelBottomClose"></span><span data-label>收起底部面板</span></button>
-        </header>
-        <div class="panel-body" id="panelBody"></div>
-      </section>
-
       <footer class="statusbar">
-        <div class="status-left" id="statusLeft" aria-live="polite"></div>
+        <div class="status-left">
+          <span id="statusBusy" aria-live="polite"></span>
+          <button class="status-action" id="languageButton" data-menu-trigger aria-label="语言 Plain Text" title="语言 Plain Text"><span data-label>Plain Text</span></button>
+          <button class="status-action" id="encodingButton" data-menu-trigger aria-label="编码 UTF-8" title="编码 UTF-8"><span data-label>UTF-8</span></button>
+          <button class="status-action" id="lineEndingButton" data-menu-trigger aria-label="行尾 LF" title="行尾 LF"><span data-label>LF</span></button>
+          <span id="statusDocumentState"></span>
+        </div>
         <div class="status-right" id="statusRight"></div>
       </footer>
 
