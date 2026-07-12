@@ -151,9 +151,11 @@ interface OpenDocument extends DocumentDto {
   id: number;
   draftId?: string;
   skipSessionRestore?: boolean;
+  origin: DocumentOrigin;
   model: monaco.editor.ITextModel;
   dirty: boolean;
   savedText: string;
+  viewState?: monaco.editor.ICodeEditorViewState;
   encodingStatus: "编码已识别" | "重新解释" | "转换待保存";
 }
 
@@ -169,8 +171,11 @@ interface DraftDocumentSnapshot {
 }
 
 interface SessionSnapshot {
+  version: number;
   openFiles: string[];
   draftDocuments: DraftDocumentSnapshot[];
+  documentOrigins: Record<string, DocumentOrigin>;
+  documentViews: Record<string, monaco.editor.ICodeEditorViewState>;
   recentFiles: string[];
   recentWorkspaces: string[];
   workspaceRoot: string | null;
@@ -180,7 +185,10 @@ interface SessionSnapshot {
   activePath: string | null;
   activeDraftId: string | null;
   darkMode: boolean;
+  rightSidebarOpen: boolean;
+  rightTool: RightTool;
   rightSidebarWidth: number;
+  treeScrollTop: number;
   showMarkdownPreview: boolean;
   markdownPreviewPreferenceSet: boolean;
   searchHistory: string[];
@@ -290,6 +298,7 @@ const encodings: EncodingLabel[] = [
 
 type SearchMode = "literal" | "extended" | "regex";
 type WorkMode = "single" | "workspace";
+type DocumentOrigin = "standalone" | "workspace";
 type FindView = "find" | "replace" | "workspace-find" | "workspace-replace";
 type RightTool = "search" | "outline";
 type SearchScope = "current" | "open" | "workspace";
@@ -649,6 +658,7 @@ const state = {
 let nextId = 1;
 let editor: monaco.editor.IStandaloneCodeEditor;
 let sessionTimer = 0;
+let sessionWriteQueue: Promise<void> = Promise.resolve();
 let unsavedResolver: ((value: UnsavedChoice) => void) | null = null;
 let confirmResolver: ((value: boolean) => void) | null = null;
 let textInputResolver: ((value: string | null) => void) | null = null;
@@ -875,8 +885,6 @@ function bootstrap() {
   window.addEventListener("error", (event) => {
     log(`界面错误：${event.message}`);
   });
-  window.addEventListener("beforeunload", saveSession);
-
   registerMdx();
   registerToml();
   registerCompletionProviders();
@@ -973,6 +981,7 @@ function markAppReady() {
 
 function bindActions() {
   bindAppMenus();
+  $("tree").addEventListener("scroll", scheduleSessionSave, { passive: true });
   $("tree").addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".tree-item");
     if (!button) return;
@@ -984,10 +993,8 @@ function bindActions() {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".tree-item");
     if (button) void handleTreeItemKeydown(button, event as KeyboardEvent);
   });
-  $("singleModeButton").addEventListener("click", () => setWorkMode("single"));
   $("newButton").addEventListener("click", newDocument);
   $("openButton").addEventListener("click", openDocument);
-  $("workspaceButton").addEventListener("click", () => void enterWorkspaceMode());
   $("saveButton").addEventListener("click", saveActive);
   $("saveAsButton").addEventListener("click", saveAsActive);
   $("saveAllButton").addEventListener("click", saveAll);
@@ -1174,7 +1181,7 @@ function bindActions() {
       void findNextResult();
     }
   });
-  $("closeWorkspaceButton").addEventListener("click", closeWorkspace);
+  $("closeWorkspaceButton").addEventListener("click", () => void closeWorkspace());
   $("replaceInput").addEventListener("keydown", (event) => {
     if ((event as KeyboardEvent).key !== "Enter" || state.findView !== "workspace-replace") return;
     event.preventDefault();
@@ -1349,7 +1356,7 @@ function bindAppMenus() {
   bindMenuAction("menuOpenButton", () => void openDocument());
   bindMenuAction("menuRecentButton", () => toggleMenu("recentMenu"));
   bindMenuAction("menuWorkspaceButton", () => void enterWorkspaceMode());
-  bindMenuAction("menuCloseWorkspaceButton", closeWorkspace);
+  bindMenuAction("menuCloseWorkspaceButton", () => void closeWorkspace());
   bindMenuAction("menuSaveButton", () => void saveActive());
   bindMenuAction("menuSaveAllButton", () => void saveAll());
   bindMenuAction("menuSaveAsButton", () => void saveAsActive());
@@ -1637,16 +1644,13 @@ function setRightSidebarWidth(width: number) {
 
 function bindWindowCloseGuard() {
   void appWindow.onCloseRequested(async (event) => {
-    if (windowCloseConfirmed) {
-      saveSession();
-      return;
-    }
+    if (windowCloseConfirmed) return;
+    event.preventDefault();
     const canClose = await confirmCloseAll();
-    if (!canClose) {
-      event.preventDefault();
-      return;
-    }
-    saveSession();
+    if (!canClose) return;
+    windowCloseConfirmed = true;
+    await flushSessionBeforeClose();
+    await appWindow.close();
   });
 }
 
@@ -1654,8 +1658,17 @@ async function requestWindowClose() {
   const canClose = await confirmCloseAll();
   if (!canClose) return;
   windowCloseConfirmed = true;
-  saveSession();
+  await flushSessionBeforeClose();
   await appWindow.close();
+}
+
+async function flushSessionBeforeClose() {
+  window.clearTimeout(sessionTimer);
+  try {
+    await saveSession();
+  } catch (error) {
+    log(`保存会话失败：${String(error)}`);
+  }
 }
 
 async function confirmCloseAll() {
@@ -1787,6 +1800,7 @@ function createDocument(
     draftId?: string;
     dirty?: boolean;
     savedText?: string;
+    origin?: DocumentOrigin;
   } = {},
 ): OpenDocument {
   const uri = monaco.Uri.parse(`notra://model/${nextId}/${encodeURIComponent(dto.title)}`);
@@ -1796,6 +1810,7 @@ function createDocument(
     ...dto,
     id: nextId++,
     draftId: dto.path ? undefined : options.draftId ?? createDraftId(),
+    origin: options.origin ?? "standalone",
     model,
     dirty: options.dirty ?? dto.text !== savedText,
     savedText,
@@ -1837,6 +1852,8 @@ function nextUntitledTitle() {
 function activateDocument(id: number) {
   const doc = state.documents.find((item) => item.id === id);
   if (!doc) return;
+  const previous = activeDocument();
+  if (previous && previous.id !== id) previous.viewState = editor.saveViewState() ?? undefined;
   state.activeId = id;
   attachEditorModel(doc);
   renderAll();
@@ -1851,7 +1868,15 @@ function activateAdjacentDocument(delta: number) {
 }
 
 function newDocument() {
-  const doc = createDocument({
+  const doc = createUntitledDocument();
+  state.documents.push(doc);
+  activateDocument(doc.id);
+  log(`新建 ${doc.title}`);
+  scheduleSessionSave();
+}
+
+function createUntitledDocument() {
+  return createDocument({
     title: nextUntitledTitle(),
     path: null,
     text: "",
@@ -1863,10 +1888,6 @@ function newDocument() {
     language: "plaintext",
     largeFile: false,
   });
-  state.documents.push(doc);
-  activateDocument(doc.id);
-  log(`新建 ${doc.title}`);
-  scheduleSessionSave();
 }
 
 async function openDocument() {
@@ -1874,29 +1895,28 @@ async function openDocument() {
     request: { defaultDir: preferredDialogDirectory() },
   });
   if (!path) return;
-  await openPath(path);
+  await openPath(path, true);
 }
 
-async function openPath(path: string) {
+async function openPath(path: string, remember = false) {
   const dto = await withBusy(`打开 ${fileNameFromPath(path)}`, () => invoke<DocumentDto>("open_path", { path }));
-  addOrReplaceDocument(dto);
-  rememberRecentPath(path);
+  addOrReplaceDocument(dto, remember ? "standalone" : "workspace");
+  if (remember) rememberRecentPath(path);
 }
 
-function addOrReplaceDocument(dto: DocumentDto) {
+function addOrReplaceDocument(dto: DocumentDto, origin: DocumentOrigin) {
   const existing = state.documents.find((doc) => doc.path && doc.path === dto.path);
   if (existing) {
     existing.model.setValue(dto.text);
     Object.assign(existing, dto, { dirty: false, savedText: dto.text, encodingStatus: "编码已识别" });
+    if (origin === "standalone") existing.origin = "standalone";
     activateDocument(existing.id);
-    if (dto.path) rememberRecentPath(dto.path);
     return;
   }
-  const doc = createDocument(dto);
+  const doc = createDocument(dto, { origin });
   state.documents.push(doc);
   activateDocument(doc.id);
   log(`打开 ${doc.title}`);
-  if (doc.path) rememberRecentPath(doc.path);
 }
 
 async function saveActive() {
@@ -1934,7 +1954,6 @@ async function saveDocument(doc: OpenDocument, forceSaveAs: boolean) {
   doc.draftId = undefined;
   monaco.editor.setModelLanguage(doc.model, saved.language || "plaintext");
   renderAll();
-  if (doc.path) rememberRecentPath(doc.path);
   scheduleSessionSave();
   log(`保存 ${doc.title}`);
   return true;
@@ -2000,9 +2019,24 @@ async function openWorkspacePath(path: string) {
   log(`工作目录 ${workspace.name}`);
 }
 
-function closeWorkspace() {
+async function closeWorkspace() {
   if (!state.workspace) return;
+  const workspaceDocuments = state.documents.filter((doc) => doc.origin === "workspace");
+  for (const doc of workspaceDocuments) {
+    if (!(await confirmDocumentCanClose(doc, "关闭工作区"))) return;
+  }
+
   const name = state.workspace.name;
+  const active = activeDocument();
+  if (active) active.viewState = editor.saveViewState() ?? undefined;
+  const workspaceDocumentIds = new Set(workspaceDocuments.map((doc) => doc.id));
+  state.documents = state.documents.filter((doc) => !workspaceDocumentIds.has(doc.id));
+  workspaceDocuments.forEach((doc) => doc.model.dispose());
+  if (state.documents.length === 0) state.documents.push(createUntitledDocument());
+  if (!state.documents.some((doc) => doc.id === state.activeId)) {
+    state.activeId = state.documents[0].id;
+  }
+
   state.workspace = null;
   state.mode = "single";
   state.showDirectory = false;
@@ -2013,6 +2047,7 @@ function closeWorkspace() {
   resetSearchResults();
   if (isWorkspaceFindView()) setFindView("find", false);
   if (state.rightTool === "search" && !$("findPopover").classList.contains("hidden")) closeRightSidebar();
+  attachEditorModel(activeDocument());
   renderAll();
   renderSettingsMenu();
   scheduleSessionSave();
@@ -2034,28 +2069,30 @@ async function refreshWorkspace() {
 }
 
 async function closeDocument(id: number): Promise<boolean> {
-  if (state.documents.length === 1) return false;
   const index = state.documents.findIndex((doc) => doc.id === id);
   if (index < 0) return false;
   const doc = state.documents[index];
-  if (doc.dirty && !doc.readOnly) {
-    const choice = await askUnsavedChoice("关闭文档", `"${doc.title}" 有未保存修改。`, doc.path || doc.title);
-    if (choice === "cancel") return false;
-    if (choice === "save") {
-      try {
-        await saveDocument(doc, false);
-      } catch (error) {
-        log(`保存取消或失败：${String(error)}`);
-        return false;
-      }
-      if (doc.dirty) return false;
-    }
-  }
+  if (!(await confirmDocumentCanClose(doc, "关闭文档"))) return false;
   state.documents.splice(index, 1);
   doc.model.dispose();
+  if (state.documents.length === 0) state.documents.push(createUntitledDocument());
   activateDocument(state.documents[Math.max(0, index - 1)].id);
   scheduleSessionSave();
   return true;
+}
+
+async function confirmDocumentCanClose(doc: OpenDocument, title: string) {
+  if (!doc.dirty || doc.readOnly) return true;
+  const choice = await askUnsavedChoice(title, `"${doc.title}" 有未保存修改。`, doc.path || doc.title);
+  if (choice === "cancel") return false;
+  if (choice !== "save") return true;
+  try {
+    await saveDocument(doc, false);
+  } catch (error) {
+    log(`保存取消或失败：${String(error)}`);
+    return false;
+  }
+  return !doc.dirty;
 }
 
 function openTabMenu(id: number, event: MouseEvent) {
@@ -3359,14 +3396,6 @@ function renderAll() {
 
 function renderChrome() {
   const doc = activeDocument();
-  setButtonLabel("singleModeButton", "单文件模式", "单文件模式");
-  setButtonLabel(
-    "workspaceButton",
-    "文件夹模式",
-    state.workspace ? `文件夹模式：${state.workspace.name}` : "文件夹模式：选择目录",
-  );
-  $("singleModeButton").classList.toggle("active", state.mode === "single");
-  $("workspaceButton").classList.toggle("active", state.mode === "workspace");
   setButtonLabel("wordWrapButton", "自动换行", `自动换行 ${state.wordWrap ? "已开启" : "已关闭"}`);
   $("wordWrapButton").classList.toggle("state-on", state.wordWrap);
   $("wordWrapButton").setAttribute("aria-pressed", String(state.wordWrap));
@@ -3660,7 +3689,7 @@ function renderRecentFiles() {
     row.innerHTML = `<span>${iconSvg("FileText")}</span><strong>${escapeHtml(fileNameFromPath(path))}</strong><small>${escapeHtml(path)}</small>`;
     row.addEventListener("click", () => {
       closeMenus();
-      void openPath(path);
+      void openPath(path, true);
     });
     list.appendChild(row);
   }
@@ -4009,6 +4038,7 @@ function restoreEditorSurface() {
     editor.setModel(model);
   }
   applyEditorPerformanceProfile(doc);
+  if (doc.viewState) editor.restoreViewState(doc.viewState);
   requestEditorLayout();
 }
 
@@ -4026,6 +4056,7 @@ function attachEditorModel(doc: OpenDocument) {
     editor.setModel(doc.model);
   }
   applyEditorPerformanceProfile(doc);
+  if (doc.viewState) editor.restoreViewState(doc.viewState);
   requestEditorLayout();
 }
 
@@ -4180,6 +4211,7 @@ function closeRightSidebar() {
   renderRightSidebarToggle();
   requestEditorLayout();
   editor.focus();
+  scheduleSessionSave();
 }
 
 function toggleRightSidebar() {
@@ -4203,12 +4235,14 @@ function toggleRightSidebar() {
   renderRightSidebar();
   renderRightSidebarToggle();
   if (state.rightTool === "search") ($("findInput") as HTMLInputElement).focus();
+  scheduleSessionSave();
 }
 
 function renderRightSidebarToggle() {
   const available = (state.mode === "workspace" && Boolean(state.workspace)) || isMarkdownLikeDocument();
   const open = !$("findPopover").classList.contains("hidden");
   const button = $<HTMLButtonElement>("rightSidebarToggleButton");
+  $("rightToolTabs").classList.toggle("hidden", !available);
   button.classList.toggle("hidden", !available);
   const label = open ? "收起右侧栏" : "打开右侧工具栏";
   button.classList.toggle("active", open);
@@ -4221,6 +4255,7 @@ function setRightTool(tool: RightTool) {
   if (tool === "outline" && !isMarkdownLikeDocument()) tool = "search";
   state.rightTool = tool;
   renderRightSidebar();
+  scheduleSessionSave();
 }
 
 function openMarkdownOutline() {
@@ -4231,6 +4266,7 @@ function openMarkdownOutline() {
   setRightSidebarWidth(state.rightSidebarWidth);
   renderRightSidebar();
   renderRightSidebarToggle();
+  scheduleSessionSave();
 }
 
 function renderRightSidebar() {
@@ -4245,7 +4281,7 @@ function renderRightSidebar() {
   if (!markdown && state.rightTool === "outline") state.rightTool = workspace ? "search" : "outline";
   $("rightSearchToolButton").classList.toggle("active", state.rightTool === "search");
   $("rightOutlineToolButton").classList.toggle("active", state.rightTool === "outline");
-  if (isWorkspaceFindView()) $("searchToolPane").classList.toggle("hidden", state.rightTool !== "search");
+  $("searchToolPane").classList.toggle("hidden", state.rightTool !== "search");
   $("outlineToolPane").classList.toggle("hidden", state.rightTool !== "outline");
   renderSearchSidebarResults();
   renderMarkdownOutline();
@@ -4267,19 +4303,27 @@ function toggleMenu(id: "languageMenu" | "encodingMenu" | "lineEndingMenu" | "re
   closeMenus();
   closeFontDropdowns();
   menu.classList.toggle("hidden", !open);
-  if (open && id !== "recentMenu") {
-    const triggerId = id === "languageMenu"
-      ? "languageButton"
-      : id === "encodingMenu"
-        ? "encodingButton"
-        : "lineEndingButton";
+  if (open) {
+    const triggerId = id === "recentMenu"
+      ? "recentButton"
+      : id === "languageMenu"
+        ? "languageButton"
+        : id === "encodingMenu"
+          ? "encodingButton"
+          : "lineEndingButton";
     const trigger = $<HTMLButtonElement>(triggerId);
     const rect = trigger.getBoundingClientRect();
-    const menuWidth = menu.offsetWidth || (id === "languageMenu" ? 430 : 360);
-    menu.style.top = "auto";
     menu.style.right = "auto";
-    menu.style.bottom = `${Math.max(34, window.innerHeight - rect.top + 4)}px`;
+    const menuWidth = menu.offsetWidth || (id === "recentMenu" ? 480 : id === "languageMenu" ? 430 : 360);
     menu.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8))}px`;
+    if (id === "recentMenu") {
+      const menuHeight = menu.offsetHeight || Math.min(560, window.innerHeight - 120);
+      menu.style.bottom = "auto";
+      menu.style.top = `${Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuHeight - 8))}px`;
+    } else {
+      menu.style.top = "auto";
+      menu.style.bottom = `${Math.max(34, window.innerHeight - rect.top + 4)}px`;
+    }
     trigger.setAttribute("aria-expanded", "true");
   }
   if (open && id === "languageMenu") {
@@ -4340,6 +4384,9 @@ function closeMenus() {
   $("viewMenu").classList.add("hidden");
   document.querySelectorAll<HTMLButtonElement>(".app-menu-trigger").forEach((trigger) => {
     trigger.setAttribute("aria-expanded", "false");
+  });
+  ["languageButton", "encodingButton", "lineEndingButton", "recentButton"].forEach((id) => {
+    $<HTMLButtonElement>(id).setAttribute("aria-expanded", "false");
   });
 }
 
@@ -4518,12 +4565,27 @@ function renderCommandSelection() {
 }
 
 async function restoreSession() {
-  const raw = localStorage.getItem(SESSION_KEY);
+  let raw: string | null = null;
+  let migratedLegacySession = false;
+  try {
+    raw = await invoke<string | null>("load_session");
+  } catch (error) {
+    log(`读取会话数据库失败：${String(error)}`);
+  }
+  if (!raw) {
+    raw = localStorage.getItem(SESSION_KEY);
+    migratedLegacySession = Boolean(raw);
+  }
   if (!raw) return;
   state.restoring = true;
   try {
     const snapshot = JSON.parse(raw) as Partial<SessionSnapshot>;
     state.recentFiles = uniquePaths(snapshot.recentFiles ?? []).slice(0, 40);
+    if ((snapshot.version ?? 1) < 3 && snapshot.workspaceRoot) {
+      state.recentFiles = state.recentFiles.filter(
+        (path) => !pathMatchesTarget(path, snapshot.workspaceRoot!, true),
+      );
+    }
     state.recentWorkspaces = uniquePaths(snapshot.recentWorkspaces ?? []).slice(0, 20);
     state.collapsedDirs = new Set(snapshot.collapsedDirs ?? []);
     state.searchHistory = (snapshot.searchHistory ?? []).slice(0, 30);
@@ -4531,6 +4593,7 @@ async function restoreSession() {
     state.searchFavorites = (snapshot.searchFavorites ?? []).slice(0, 30);
     state.findView = snapshot.findView ?? "find";
     state.mode = snapshot.workMode ?? (snapshot.workspaceRoot ? "workspace" : "single");
+    state.rightTool = snapshot.rightTool === "outline" ? "outline" : "search";
     state.rightSidebarWidth = snapshot.rightSidebarWidth ?? state.rightSidebarWidth;
     setRightSidebarWidth(state.rightSidebarWidth);
     state.markdownPreviewPreferenceSet = snapshot.markdownPreviewPreferenceSet ?? false;
@@ -4566,6 +4629,10 @@ async function restoreSession() {
         const workspace = await invoke<WorkspaceDto>("read_workspace", { path: snapshot.workspaceRoot });
         state.workspace = workspace;
         state.showDirectory = state.mode === "workspace" ? snapshot.showDirectory ?? true : false;
+        if (!state.recentWorkspaces.includes(workspace.root)) {
+          state.recentWorkspaces.unshift(workspace.root);
+          state.recentWorkspaces = state.recentWorkspaces.slice(0, 20);
+        }
         ($("directoryInput") as HTMLInputElement).value = workspace.root;
       } catch (error) {
         log(`恢复工作目录失败：${String(error)}`);
@@ -4579,7 +4646,9 @@ async function restoreSession() {
     for (const path of restoredFiles) {
       try {
         const dto = await invoke<DocumentDto>("open_path", { path });
-        addOrReplaceDocument(dto);
+        addOrReplaceDocument(dto, restoredDocumentOrigin(path, snapshot));
+        const restored = state.documents.find((doc) => doc.path === path);
+        if (restored) restored.viewState = snapshot.documentViews?.[documentSessionKey(restored)];
         restoredCount += 1;
       } catch (error) {
         log(`恢复文件失败：${path}：${String(error)}`);
@@ -4588,6 +4657,8 @@ async function restoreSession() {
     let restoredDraftCount = 0;
     for (const draft of snapshot.draftDocuments ?? []) {
       const doc = createDraftDocument(draft);
+      doc.origin = snapshot.documentOrigins?.[documentSessionKey(doc)] ?? "standalone";
+      doc.viewState = snapshot.documentViews?.[documentSessionKey(doc)];
       state.documents.push(doc);
       restoredDraftCount += 1;
     }
@@ -4606,13 +4677,23 @@ async function restoreSession() {
       state.activeId = state.documents[0].id;
     }
     // Switch model first so the disposed placeholder is never left attached to the editor.
-    editor.setModel(activeDocument().model);
-    applyEditorPerformanceProfile(activeDocument());
+    const restoredActive = activeDocument();
+    editor.setModel(restoredActive.model);
+    applyEditorPerformanceProfile(restoredActive);
+    if (restoredActive.viewState) editor.restoreViewState(restoredActive.viewState);
     if (placeholder && !state.documents.includes(placeholder)) {
       placeholder.model.dispose();
     }
 
+    const rightSidebarAvailable =
+      (state.mode === "workspace" && Boolean(state.workspace)) || isMarkdownLikeDocument();
+    const rightSidebarOpen = Boolean(snapshot.rightSidebarOpen) && rightSidebarAvailable;
+    $("findPopover").classList.toggle("hidden", !rightSidebarOpen);
+    $("app").classList.toggle("right-sidebar-open", rightSidebarOpen);
     renderAll();
+    window.requestAnimationFrame(() => {
+      $("tree").scrollTop = Math.max(0, snapshot.treeScrollTop ?? 0);
+    });
     log(`会话已恢复：${restoredCount} 个文件，${restoredDraftCount} 个临时文件`);
   } catch (error) {
     log(`会话恢复失败：${String(error)}`);
@@ -4625,7 +4706,17 @@ async function restoreSession() {
     });
     window.setTimeout(requestEditorLayout, 120);
     window.setTimeout(requestEditorLayout, 360);
-    scheduleSessionSave();
+    if (migratedLegacySession) {
+      try {
+        await saveSession();
+        localStorage.removeItem(SESSION_KEY);
+        log("旧版会话已迁移到 SQLite");
+      } catch (error) {
+        log(`迁移旧版会话失败：${String(error)}`);
+      }
+    } else {
+      scheduleSessionSave();
+    }
   }
 }
 
@@ -4641,7 +4732,7 @@ async function openStartupArgs() {
       log(`启动目录 ${workspace.name}`);
     }
     for (const path of args.files) {
-      await openPath(path);
+      await openPath(path, args.directories.length === 0);
     }
     if (args.files.length > 0 || args.directories.length > 0) {
       renderAll();
@@ -4696,6 +4787,23 @@ function ensureDraftId(doc: OpenDocument) {
   return doc.draftId;
 }
 
+function documentSessionKey(doc: OpenDocument) {
+  return doc.path ? `file:${doc.path}` : `draft:${ensureDraftId(doc)}`;
+}
+
+function restoredDocumentOrigin(path: string, snapshot: Partial<SessionSnapshot>): DocumentOrigin {
+  const stored = snapshot.documentOrigins?.[`file:${path}`];
+  if (stored === "standalone" || stored === "workspace") return stored;
+  if (
+    snapshot.workspaceRoot
+    && pathMatchesTarget(path, snapshot.workspaceRoot, true)
+    && !state.recentFiles.includes(path)
+  ) {
+    return "workspace";
+  }
+  return "standalone";
+}
+
 function draftDocumentSnapshots() {
   return state.documents
     .filter((doc) => !doc.path && !doc.skipSessionRestore)
@@ -4714,14 +4822,26 @@ function draftDocumentSnapshots() {
 function scheduleSessionSave() {
   if (state.restoring) return;
   window.clearTimeout(sessionTimer);
-  sessionTimer = window.setTimeout(saveSession, 250);
+  sessionTimer = window.setTimeout(() => {
+    void saveSession().catch((error) => log(`保存会话失败：${String(error)}`));
+  }, 250);
 }
 
-function saveSession() {
+async function saveSession() {
+  if (state.restoring) return;
+  const activeBeforeSave = activeDocument();
+  if (activeBeforeSave) activeBeforeSave.viewState = editor.saveViewState() ?? undefined;
   const active = activeDocument();
   const snapshot: SessionSnapshot = {
+    version: 4,
     openFiles: uniquePaths(state.documents.flatMap((doc) => (doc.path ? [doc.path] : []))),
     draftDocuments: draftDocumentSnapshots(),
+    documentOrigins: Object.fromEntries(
+      state.documents.map((doc) => [documentSessionKey(doc), doc.origin]),
+    ),
+    documentViews: Object.fromEntries(
+      state.documents.flatMap((doc) => doc.viewState ? [[documentSessionKey(doc), doc.viewState]] : []),
+    ),
     recentFiles: uniquePaths(state.recentFiles).slice(0, 40),
     recentWorkspaces: uniquePaths(state.recentWorkspaces).slice(0, 20),
     workspaceRoot: state.workspace?.root ?? null,
@@ -4731,7 +4851,10 @@ function saveSession() {
     activePath: active?.path ?? null,
     activeDraftId: active && !active.path ? ensureDraftId(active) : null,
     darkMode: state.darkMode,
+    rightSidebarOpen: !$("findPopover").classList.contains("hidden"),
+    rightTool: state.rightTool,
     rightSidebarWidth: state.rightSidebarWidth,
+    treeScrollTop: $("tree").scrollTop,
     showMarkdownPreview: state.showMarkdownPreview,
     markdownPreviewPreferenceSet: state.markdownPreviewPreferenceSet,
     searchHistory: state.searchHistory.slice(0, 30),
@@ -4760,7 +4883,10 @@ function saveSession() {
     fileGlob: ($("fileGlobInput") as HTMLInputElement).value || "*.*",
     skipDirs: ($("skipDirsInput") as HTMLInputElement).value || DEFAULT_SKIP_DIRS,
   };
-  localStorage.setItem(SESSION_KEY, JSON.stringify(snapshot));
+  const serialized = JSON.stringify(snapshot);
+  const write = sessionWriteQueue.then(() => invoke<void>("save_session", { snapshot: serialized }));
+  sessionWriteQueue = write.catch(() => undefined);
+  await write;
 }
 
 function rememberRecentPath(path: string) {

@@ -111,7 +111,7 @@ select:focus-visible {
     "workspace right"
     "status status";
   grid-template-columns: minmax(0, 1fr) 0;
-  grid-template-rows: 40px 54px 34px minmax(0, 1fr) 30px;
+  grid-template-rows: 40px 42px 34px minmax(0, 1fr) 30px;
   background: var(--surface);
 }
 
@@ -303,6 +303,8 @@ select:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 0;
+  padding: 0 0 0 8px;
   overflow: hidden;
   overflow-y: hidden;
 }
@@ -325,16 +327,16 @@ select:focus-visible {
 
 .tool-group {
   flex-wrap: nowrap;
-  gap: 6px;
+  gap: 3px;
   white-space: nowrap;
 }
 
 .tool-divider {
   flex: 0 0 auto;
   width: 1px;
-  height: 26px;
+  height: 20px;
   background: var(--line-soft);
-  margin: 0 2px;
+  margin: 0 3px;
 }
 
 .tool-button,
@@ -424,11 +426,22 @@ select:focus-visible {
   padding-inline: 9px 7px;
 }
 
-.toolbar .tool-button,
 .panel-head .tool-button,
 .ghost-button.icon-only {
   width: 34px;
   padding: 0;
+}
+
+.toolbar .tool-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.toolbar .tool-button .lucide-icon {
+  width: 16px;
+  height: 16px;
 }
 
 .toolbar .tool-button.meta {
@@ -442,8 +455,7 @@ select:focus-visible {
 
 @media (max-width: 1180px) {
   .toolbar {
-    gap: 8px;
-    padding: 0 10px;
+    padding-left: 6px;
   }
 
   .tool-divider {
@@ -486,7 +498,7 @@ select:focus-visible {
   display: none;
 }
 
-.tabs-sidebar-toggle {
+.right-sidebar-toggle {
   width: 28px;
   height: 28px;
   flex: 0 0 28px;
@@ -500,14 +512,14 @@ select:focus-visible {
   background: transparent;
 }
 
-.tabs-sidebar-toggle:hover,
-.tabs-sidebar-toggle.active {
+.right-sidebar-toggle:hover,
+.right-sidebar-toggle.active {
   color: var(--text);
   border-color: var(--line-soft);
   background: var(--surface-3);
 }
 
-.tabs-sidebar-toggle .lucide-icon {
+.right-sidebar-toggle .lucide-icon {
   width: 17px;
   height: 17px;
 }
@@ -1488,7 +1500,13 @@ select:focus-visible {
   -webkit-backdrop-filter: none;
   overflow: visible;
   display: grid;
-  grid-template-rows: 34px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.right-search-dock,
+#outlineToolPane {
+  grid-column: 1;
+  grid-row: 1;
 }
 
 .right-sidebar-resize {
@@ -3160,6 +3178,28 @@ tbody tr.result-active {
   min-width: 0;
   border-bottom: 1px solid var(--line-soft);
   background: var(--surface);
+}
+
+.toolbar > .right-tool-tabs {
+  width: var(--right-sidebar-width);
+  height: 100%;
+  flex: 0 0 var(--right-sidebar-width);
+  align-self: stretch;
+  padding: 0 10px;
+  border-bottom: 0;
+  border-left: 1px solid var(--line);
+}
+
+#app:not(.right-sidebar-open) .toolbar > .right-tool-tabs {
+  width: 38px;
+  flex-basis: 38px;
+  padding: 0 5px;
+  border-left-color: transparent;
+}
+
+#app:not(.right-sidebar-open) .toolbar > .right-tool-tabs .right-tool-tab,
+#app:not(.right-sidebar-open) .toolbar > .right-tool-tabs .right-tool-spacer {
+  display: none;
 }
 
 .current-find-bar {

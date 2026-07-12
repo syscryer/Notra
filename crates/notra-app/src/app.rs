@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::Manager;
+
+use crate::session_store::SessionStore;
 
 const TREE_LIMIT: usize = 50_000;
 const TREE_MAX_DEPTH: usize = 8;
@@ -285,7 +288,20 @@ pub struct WorkspacePathRequest {
 
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let database_path = app
+                .path()
+                .app_data_dir()
+                .map_err(|error| std::io::Error::other(error.to_string()))?
+                .join("notra.db");
+            let store = SessionStore::new(database_path);
+            store.initialize().map_err(std::io::Error::other)?;
+            app.manage(store);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            load_session,
+            save_session,
             open_file_dialog,
             pick_file_path,
             open_path,
@@ -308,6 +324,16 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Notra");
+}
+
+#[tauri::command]
+fn load_session(store: tauri::State<'_, SessionStore>) -> Result<Option<String>, String> {
+    store.load()
+}
+
+#[tauri::command]
+fn save_session(snapshot: String, store: tauri::State<'_, SessionStore>) -> Result<(), String> {
+    store.save(&snapshot)
 }
 
 #[tauri::command]

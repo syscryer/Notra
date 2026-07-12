@@ -17,6 +17,7 @@ rfd.workspace = true
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+rusqlite.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true

@@ -101,8 +101,6 @@
           <button class="tool-button" id="newButton" aria-label="新建 Ctrl+N" title="新建 Ctrl+N" aria-keyshortcuts="Control+N"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
           <button class="tool-button" id="openButton" aria-label="打开文件 Ctrl+O" title="打开文件 Ctrl+O" aria-keyshortcuts="Control+O"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
           <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近打开" title="最近打开" aria-haspopup="menu"><span class="icon-slot" data-icon="History"></span><span data-label>最近打开</span></button>
-          <button class="tool-button" id="workspaceButton" aria-label="工作区模式" title="工作区模式"><span class="icon-slot" data-icon="FolderTree"></span><span data-label>工作区模式</span></button>
-          <button class="tool-button" id="singleModeButton" aria-label="单文件模式" title="单文件模式"><span class="icon-slot" data-icon="File"></span><span data-label>单文件模式</span></button>
           <span class="tool-divider"></span>
           <button class="tool-button" id="saveButton" aria-label="保存 Ctrl+S" title="保存 Ctrl+S" aria-keyshortcuts="Control+S"><span class="icon-slot" data-icon="Save"></span><span data-label>保存</span></button>
           <button class="tool-button" id="saveAllButton" aria-label="保存全部" title="保存全部"><span class="icon-slot" data-icon="SaveAll"></span><span data-label>保存全部</span></button>
@@ -121,7 +119,12 @@
           <button class="tool-button" id="wordWrapButton" aria-label="自动换行" title="自动换行" aria-pressed="false"><span class="icon-slot" data-icon="WrapText"></span><span data-label>自动换行</span></button>
           <button class="tool-button" id="markdownPreviewButton" aria-label="Markdown 分屏预览" title="Markdown 分屏预览" aria-pressed="false"><span class="icon-slot" data-icon="FileText"></span><span data-label>Markdown 分屏预览</span></button>
         </div>
-
+        <header class="right-tool-tabs" id="rightToolTabs" aria-label="右侧工具">
+          <button class="right-tool-tab active" id="rightSearchToolButton" data-right-tool="search"><span class="icon-slot" data-icon="Search"></span><span>文件查找</span></button>
+          <button class="right-tool-tab hidden" id="rightOutlineToolButton" data-right-tool="outline"><span class="icon-slot" data-icon="ListTree"></span><span>大纲</span></button>
+          <span class="right-tool-spacer"></span>
+          <button class="right-sidebar-toggle" id="rightSidebarToggleButton" aria-label="打开搜索侧栏" title="打开搜索侧栏"><span class="icon-slot" data-icon="PanelRightOpen"></span></button>
+        </header>
       </nav>
 
       <section class="popover app-menu hidden" id="fileMenu" role="menu" aria-label="文件菜单">
@@ -176,7 +179,6 @@
 
       <section class="tabs" id="tabsBar">
         <div class="tabs-list" id="tabs"></div>
-        <button class="tabs-sidebar-toggle" id="rightSidebarToggleButton" aria-label="打开搜索侧栏" title="打开搜索侧栏"><span class="icon-slot" data-icon="PanelRightOpen"></span></button>
       </section>
 
       <section class="workspace" id="workspace">
@@ -611,11 +613,6 @@
 
       <section class="find-popover right-sidebar hidden" id="findPopover" aria-label="右侧工具栏">
         <div class="right-sidebar-resize" id="rightSidebarResize" role="separator" aria-orientation="vertical" aria-label="调整右侧栏宽度" tabindex="0"></div>
-        <header class="right-tool-tabs">
-          <button class="right-tool-tab active" id="rightSearchToolButton" data-right-tool="search"><span class="icon-slot" data-icon="Search"></span><span>文件查找</span></button>
-          <button class="right-tool-tab hidden" id="rightOutlineToolButton" data-right-tool="outline"><span class="icon-slot" data-icon="ListTree"></span><span>大纲</span></button>
-          <span class="right-tool-spacer"></span>
-        </header>
         <div class="right-search-dock" id="rightSearchDock">
         <div class="right-tool-pane" id="searchToolPane">
           <div class="segmented find-view-tabs">
