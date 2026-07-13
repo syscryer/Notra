@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 notra-core.workspace = true
-tauri.workspace = true
+tauri = { workspace = true, features = ["protocol-asset"] }
 rfd.workspace = true
 regex.workspace = true
 serde.workspace = true

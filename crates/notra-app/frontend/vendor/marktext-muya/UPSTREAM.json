@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/marktext/marktext.git",
+  "tag": "v0.20.0-rc.1",
+  "tagObject": "285b8d01c66e634e49154a3cc4a8df6537d6dc82",
+  "commit": "8f1d0a6253efea9ac33304e45364cc05874522a9",
+  "packagePath": "packages/muya",
+  "integrationPatches": [
+    "Resolve Prism components from the Notra frontend node_modules directory"
+  ],
+  "syncedAt": "2026-07-13"
+}

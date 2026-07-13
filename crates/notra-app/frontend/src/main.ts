@@ -1,21 +1,30 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowDown,
   ArrowUp,
+  BetweenVerticalEnd,
+  BetweenVerticalStart,
   Binary,
+  Bold,
   Braces,
   CaseLower,
   CaseUpper,
   Check,
   ChevronDown,
+  ChevronRight,
   CircleX,
+  ClipboardCopy,
+  ClipboardPaste,
+  Columns2,
   Command,
+  Code2,
   Copy,
   Edit3,
   Eraser,
   ExternalLink,
   File,
+  FileCode2,
   FilePlus2,
   FileSearch,
   FileText,
@@ -26,7 +35,19 @@ import {
   FolderX,
   Highlighter,
   History,
+  Heading1,
+  Heading2,
+  Heading3,
+  Heading4,
+  Heading5,
+  Heading6,
+  Image,
   Info,
+  Italic,
+  Link2,
+  List,
+  ListChecks,
+  ListOrdered,
   ListRestart,
   ListTree,
   LoaderCircle,
@@ -34,6 +55,7 @@ import {
   Maximize2,
   Minus,
   Moon,
+  NotebookPen,
   PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
@@ -42,12 +64,17 @@ import {
   RefreshCw,
   Replace,
   ReplaceAll,
+  Quote,
   Save,
   SaveAll,
   SavePlus,
   Search,
+  Scissors,
+  SeparatorHorizontal,
   Settings,
+  Sigma,
   Sun,
+  Table2,
   Type,
   Undo2,
   Trash2,
@@ -58,6 +85,10 @@ import {
   createElement as createLucideElement,
   type IconNode,
 } from "lucide";
+import type {
+  MarkdownEditorBridge,
+  MarkdownSearchOptions,
+} from "./markdownEditor";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
@@ -189,8 +220,10 @@ interface SessionSnapshot {
   rightTool: RightTool;
   rightSidebarWidth: number;
   treeScrollTop: number;
-  showMarkdownPreview: boolean;
-  markdownPreviewPreferenceSet: boolean;
+  markdownEditMode: MarkdownEditMode;
+  markdownContentWidth: MarkdownContentWidth;
+  showMarkdownPreview?: boolean;
+  markdownPreviewPreferenceSet?: boolean;
   searchHistory: string[];
   replaceHistory: string[];
   searchFavorites: string[];
@@ -298,6 +331,8 @@ const encodings: EncodingLabel[] = [
 
 type SearchMode = "literal" | "extended" | "regex";
 type WorkMode = "single" | "workspace";
+type MarkdownEditMode = "wysiwyg" | "split" | "source";
+type MarkdownContentWidth = "typora" | "compact" | "wide" | "full";
 type DocumentOrigin = "standalone" | "workspace";
 type FindView = "find" | "replace" | "workspace-find" | "workspace-replace";
 type RightTool = "search" | "outline";
@@ -307,8 +342,6 @@ type SettingsSection = "appearance" | "editor" | "workspace" | "search" | "about
 type FontMode = "preset" | "custom";
 type ShellFontPreset = "system" | "segoe" | "yahei" | "dengxian" | "sourceHanSans" | "misans";
 type EditorFontPreset = "cascadia" | "jetbrains" | "consolas" | "firaCode" | "sourceCodePro";
-type MarkdownListType = "ul" | "ol";
-type MarkdownTableAlign = "" | "left" | "center" | "right";
 type TreeIconShape =
   | "archive"
   | "code"
@@ -623,8 +656,8 @@ const state = {
   replaceHistory: [] as string[],
   searchFavorites: [] as string[],
   showDirectory: false,
-  showMarkdownPreview: true,
-  markdownPreviewPreferenceSet: false,
+  markdownEditMode: "wysiwyg" as MarkdownEditMode,
+  markdownContentWidth: "typora" as MarkdownContentWidth,
   darkMode: false,
   panel: "results" as "results" | "preview" | "logs",
   logs: [] as string[],
@@ -670,10 +703,21 @@ let commandActiveIndex = 0;
 let tabMenuDocumentId = 0;
 let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
+let editorBusyDepth = 0;
 let titlebarMaximizeToggleAt = 0;
 let titlebarDragState: { pointerId: number; startX: number; startY: number } | null = null;
 let rightSidebarResizeState: { pointerId: number } | null = null;
 let markdownPreviewTimer = 0;
+let markdownPreviewRenderVersion = 0;
+let markdownModelSyncTimer = 0;
+let currentFindTimer = 0;
+let markdownEditor: MarkdownEditorBridge | null = null;
+let markdownEditorPromise: Promise<MarkdownEditorBridge> | null = null;
+let markdownModulePromise: Promise<typeof import("./markdownEditor")> | null = null;
+let markdownEditorDocumentId = 0;
+let markdownSyncingFromEditor = false;
+let markdownImageObserver: MutationObserver | null = null;
+let markdownImageRefreshFrame = 0;
 
 type UnsavedChoice = "save" | "discard" | "cancel";
 type TreeContextTarget = {
@@ -703,19 +747,28 @@ const appWindow = getCurrentWindow();
 const lucideIcons: Record<string, IconNode> = {
   ArrowDown,
   ArrowUp,
+  BetweenVerticalEnd,
+  BetweenVerticalStart,
   Binary,
+  Bold,
   Braces,
   CaseLower,
   CaseUpper,
   Check,
   ChevronDown,
+  ChevronRight,
   CircleX,
+  ClipboardCopy,
+  ClipboardPaste,
+  Columns2,
   Command,
+  Code2,
   Copy,
   Edit3,
   Eraser,
   ExternalLink,
   File,
+  FileCode2,
   FilePlus2,
   FileSearch,
   FileText,
@@ -726,7 +779,19 @@ const lucideIcons: Record<string, IconNode> = {
   FolderX,
   Highlighter,
   History,
+  Heading1,
+  Heading2,
+  Heading3,
+  Heading4,
+  Heading5,
+  Heading6,
+  Image,
   Info,
+  Italic,
+  Link2,
+  List,
+  ListChecks,
+  ListOrdered,
   ListRestart,
   ListTree,
   LoaderCircle,
@@ -734,6 +799,7 @@ const lucideIcons: Record<string, IconNode> = {
   Maximize2,
   Minus,
   Moon,
+  NotebookPen,
   PanelLeftClose,
   PanelRightClose,
   PanelRightOpen,
@@ -742,12 +808,17 @@ const lucideIcons: Record<string, IconNode> = {
   RefreshCw,
   Replace,
   ReplaceAll,
+  Quote,
   Save,
   SaveAll,
   SavePlus,
   Search,
+  Scissors,
+  SeparatorHorizontal,
   Settings,
+  Sigma,
   Sun,
+  Table2,
   Type,
   Undo2,
   Trash2,
@@ -906,6 +977,7 @@ function bootstrap() {
   state.documents.push(initial);
   state.activeId = initial.id;
   applyShellFontSettings();
+  applyMarkdownContentWidth();
 
   editor = monaco.editor.create($("editor"), {
     model: initial.model,
@@ -981,6 +1053,8 @@ function markAppReady() {
 
 function bindActions() {
   bindAppMenus();
+  bindMarkdownContextMenu();
+  $("markdownPreview").addEventListener("click", handleMarkdownPreviewClick);
   $("tree").addEventListener("scroll", scheduleSessionSave, { passive: true });
   $("tree").addEventListener("click", (event) => {
     const button = (event.target as HTMLElement).closest<HTMLButtonElement>(".tree-item");
@@ -995,11 +1069,12 @@ function bindActions() {
   });
   $("newButton").addEventListener("click", newDocument);
   $("openButton").addEventListener("click", openDocument);
+  $("workspaceButton").addEventListener("click", () => void enterWorkspaceMode());
   $("saveButton").addEventListener("click", saveActive);
   $("saveAsButton").addEventListener("click", saveAsActive);
   $("saveAllButton").addEventListener("click", saveAll);
-  $("undoButton").addEventListener("click", () => editor.trigger("toolbar", "undo", null));
-  $("redoButton").addEventListener("click", () => editor.trigger("toolbar", "redo", null));
+  $("undoButton").addEventListener("click", undoEditor);
+  $("redoButton").addEventListener("click", redoEditor);
   $("uppercaseButton").addEventListener("click", transformToUppercase);
   $("lowercaseButton").addEventListener("click", transformToLowercase);
   $("findButton").addEventListener("click", () => {
@@ -1045,10 +1120,10 @@ function bindActions() {
     syncCurrentFindControls();
     replaceAllCurrentFile();
   });
-  $("currentFindInput").addEventListener("input", syncCurrentFindControls);
+  $("currentFindInput").addEventListener("input", scheduleCurrentFind);
   $("currentReplaceInput").addEventListener("input", syncCurrentFindControls);
   ["currentMatchCaseInput", "currentWholeWordInput", "currentRegexInput"].forEach((id) => {
-    $(id).addEventListener("change", syncCurrentFindControls);
+    $(id).addEventListener("change", scheduleCurrentFind);
   });
   $("currentFindInput").addEventListener("keydown", (event) => {
     if ((event as KeyboardEvent).key !== "Enter") return;
@@ -1087,7 +1162,8 @@ function bindActions() {
   bindSegmentedSetting("settingsWordWrapControl", (value) => setWordWrap(value === "on"));
   bindSegmentedSetting("settingsMinimapControl", (value) => setMinimap(value === "on"));
   bindSegmentedSetting("settingsWhitespaceControl", (value) => setWhitespace(value as RenderWhitespaceMode));
-  bindSegmentedSetting("settingsMarkdownControl", (value) => setMarkdownPreviewVisible(value === "on"));
+  bindSegmentedSetting("settingsMarkdownWidthControl", (value) => setMarkdownContentWidth(value));
+  bindSegmentedSetting("settingsMarkdownControl", (value) => setMarkdownEditMode(value as MarkdownEditMode));
   bindSegmentedSetting("settingsModeControl", (value) => {
     if (value === "workspace") {
       void enterWorkspaceMode();
@@ -1159,7 +1235,9 @@ function bindActions() {
   });
   $("refreshDirectoryButton").addEventListener("click", () => void refreshWorkspace());
   $("themeButton").addEventListener("click", toggleTheme);
-  $("markdownPreviewButton").addEventListener("click", toggleMarkdownPreviewPreference);
+  document.querySelectorAll<HTMLButtonElement>("[data-markdown-mode]").forEach((button) => {
+    button.addEventListener("click", () => setMarkdownEditMode(button.dataset.markdownMode as MarkdownEditMode));
+  });
 
   ["findInput", "replaceInput", "directoryInput", "fileGlobInput", "skipDirsInput", "searchModeInput"].forEach((id) => {
     $(id).addEventListener("change", scheduleSessionSave);
@@ -1212,6 +1290,18 @@ function bindActions() {
 
 
   document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "s") return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    if (event.shiftKey) {
+      void saveAsActive();
+    } else {
+      void saveActive();
+    }
+  }, true);
+
+  document.addEventListener("keydown", (event) => {
     if (handleContextMenuKeydown(event)) return;
     if (event.key === "F2" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
       const focusedTreeItem = document.activeElement?.closest<HTMLButtonElement>(".tree-item");
@@ -1251,14 +1341,6 @@ function bindActions() {
       }
       closeMenus();
       $("commandPalette").classList.add("hidden");
-    }
-    if (event.ctrlKey && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      if (event.shiftKey) {
-        void saveAsActive();
-      } else {
-        void saveActive();
-      }
     }
     if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "o") {
       event.preventDefault();
@@ -1361,11 +1443,11 @@ function bindAppMenus() {
   bindMenuAction("menuSaveAllButton", () => void saveAll());
   bindMenuAction("menuSaveAsButton", () => void saveAsActive());
   bindMenuAction("menuCloseButton", () => void closeDocument(activeDocument().id));
-  bindMenuAction("menuUndoButton", () => editor.trigger("menu", "undo", null));
-  bindMenuAction("menuRedoButton", () => editor.trigger("menu", "redo", null));
+  bindMenuAction("menuUndoButton", undoEditor);
+  bindMenuAction("menuRedoButton", redoEditor);
   bindMenuAction("menuUppercaseButton", transformToUppercase);
   bindMenuAction("menuLowercaseButton", transformToLowercase);
-  bindMenuAction("menuSelectAllButton", () => runEditorAction("editor.action.selectAll"));
+  bindMenuAction("menuSelectAllButton", selectAllEditor);
   bindMenuAction("menuFindButton", () => {
     setFindView("find");
     toggleFindOpen({ prefillFromSelection: true });
@@ -1379,7 +1461,9 @@ function bindAppMenus() {
   bindMenuAction("menuGoToLineButton", goToLine);
   bindMenuAction("menuCommandButton", openCommandPalette);
   bindMenuAction("menuWordWrapButton", toggleWordWrap);
-  bindMenuAction("menuMarkdownButton", toggleMarkdownPreviewPreference);
+  bindMenuAction("menuMarkdownWysiwygButton", () => setMarkdownEditMode("wysiwyg"));
+  bindMenuAction("menuMarkdownSplitButton", () => setMarkdownEditMode("split"));
+  bindMenuAction("menuMarkdownSourceButton", () => setMarkdownEditMode("source"));
   bindMenuAction("menuOutlineButton", openMarkdownOutline);
   bindMenuAction("menuThemeButton", toggleTheme);
 }
@@ -1389,6 +1473,140 @@ function bindMenuAction(id: string, action: () => void) {
     closeMenus();
     action();
   });
+}
+
+function bindMarkdownContextMenu() {
+  $("editor").parentElement?.addEventListener("contextmenu", openMarkdownContextMenu);
+  $("markdownContextMenu").querySelectorAll<HTMLButtonElement>("[data-markdown-action]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const action = button.dataset.markdownAction;
+      if (!action) return;
+      void runMarkdownContextAction(action).catch((error) => {
+        log(`Markdown 编辑操作失败：${error instanceof Error ? error.message : String(error)}`);
+      });
+    });
+  });
+  $("markdownContextMenu").querySelectorAll<HTMLElement>(".markdown-context-submenu-host").forEach((host) => {
+    const trigger = host.querySelector<HTMLButtonElement>("[data-markdown-submenu]");
+    if (!trigger) return;
+    host.addEventListener("pointerenter", () => {
+      if (!$("markdownContextMenu").classList.contains("hidden") && !trigger.disabled) {
+        openMarkdownSubmenu(trigger, false);
+      }
+    });
+    host.addEventListener("pointerleave", () => closeMarkdownSubmenus());
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const submenu = $(trigger.dataset.markdownSubmenu ?? "");
+      if (submenu.classList.contains("hidden")) openMarkdownSubmenu(trigger, true);
+      else closeMarkdownSubmenus();
+    });
+  });
+}
+
+function openMarkdownContextMenu(event: Event) {
+  const pointerEvent = event as MouseEvent;
+  const target = pointerEvent.target instanceof Element ? pointerEvent.target : null;
+  if (!markdownEditor || !isMarkdownWysiwygActive() || !target || !markdownEditor.root.contains(target)) return;
+  if (target.closest("input, textarea, select, .mu-float")) return;
+  pointerEvent.preventDefault();
+  pointerEvent.stopPropagation();
+  closeMenus();
+  closeFontDropdowns();
+  markdownEditor.hideFloatTools();
+  const menu = $("markdownContextMenu");
+  updateMarkdownContextMenuState();
+  menu.classList.toggle("submenu-left", pointerEvent.clientX + 258 + 242 + 16 > window.innerWidth);
+  showContextMenu(menu, pointerEvent, 258, 280);
+}
+
+function updateMarkdownContextMenuState() {
+  const menu = $("markdownContextMenu");
+  const hasSelection = Boolean(markdownEditor?.selectedText());
+  const readOnly = editorBusyDepth > 0 || activeDocument().readOnly;
+  menu.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+    const needsSelection = button.hasAttribute("data-needs-selection");
+    const needsEdit = button.hasAttribute("data-needs-edit");
+    button.disabled = (needsSelection && !hasSelection) || (needsEdit && readOnly);
+  });
+  $<HTMLButtonElement>("markdownCopyPasteMenuButton").disabled = !hasSelection && readOnly;
+}
+
+function openMarkdownSubmenu(trigger: HTMLButtonElement, focusFirst: boolean) {
+  if (trigger.disabled) return;
+  const submenuId = trigger.dataset.markdownSubmenu;
+  if (!submenuId) return;
+  closeMarkdownSubmenus(submenuId);
+  const submenu = $(submenuId);
+  submenu.classList.remove("hidden");
+  trigger.setAttribute("aria-expanded", "true");
+  submenu.style.top = "-6px";
+  const hostRect = trigger.parentElement?.getBoundingClientRect();
+  const submenuRect = submenu.getBoundingClientRect();
+  if (hostRect && submenuRect.bottom > window.innerHeight - 8) {
+    const top = Math.max(8 - hostRect.top, window.innerHeight - 8 - hostRect.top - submenuRect.height);
+    submenu.style.top = `${top}px`;
+  }
+  if (focusFirst) contextMenuButtons(submenu)[0]?.focus();
+}
+
+function closeMarkdownSubmenus(exceptId = "") {
+  $("markdownContextMenu").querySelectorAll<HTMLElement>(".markdown-context-submenu").forEach((submenu) => {
+    if (submenu.id === exceptId) return;
+    submenu.classList.add("hidden");
+    submenu.style.top = "-6px";
+  });
+  $("markdownContextMenu").querySelectorAll<HTMLButtonElement>("[data-markdown-submenu]").forEach((trigger) => {
+    trigger.setAttribute("aria-expanded", String(trigger.dataset.markdownSubmenu === exceptId));
+  });
+}
+
+async function runMarkdownContextAction(action: string) {
+  const bridge = markdownEditor;
+  if (!bridge || !isMarkdownWysiwygActive()) return;
+  if (action === "cut" || action === "copy" || action === "delete") {
+    document.execCommand(action);
+    closeMenus();
+    bridge.focus();
+    return;
+  }
+  closeMenus();
+  if (action === "paste" || action === "paste-plain") {
+    await bridge.pasteAsPlainText();
+    return;
+  }
+  if (action === "copy-markdown") {
+    bridge.copyAsMarkdown();
+    return;
+  }
+  if (action === "copy-html") {
+    bridge.copyAsHtml();
+    return;
+  }
+  if (action === "copy-rich") {
+    bridge.copyAsRich();
+    return;
+  }
+  if (action.startsWith("format:")) {
+    bridge.format(action.slice("format:".length));
+    return;
+  }
+  if (action.startsWith("paragraph:")) {
+    bridge.updateParagraph(action.slice("paragraph:".length));
+    return;
+  }
+  if (action === "insert:image") {
+    const src = await pickMarkdownImagePath();
+    if (src && bridge === markdownEditor && isMarkdownWysiwygActive()) bridge.insertImage(src);
+    return;
+  }
+  if (action === "insert:table") {
+    bridge.createTable();
+    return;
+  }
+  if (action === "insert:before" || action === "insert:after") {
+    bridge.insertParagraph(action.endsWith("before") ? "before" : "after");
+  }
 }
 
 function bindSegmentedSetting(id: string, handler: (value: string) => void) {
@@ -1451,6 +1669,8 @@ function setThemeMode(darkMode: boolean) {
   state.darkMode = darkMode;
   document.body.classList.toggle("dark", state.darkMode);
   monaco.editor.setTheme(state.darkMode ? "notra-dark" : "notra-light");
+  markdownEditor?.updateAppearance(state.darkMode, state.fontSize, resolveEditorFontStack());
+  if (isMarkdownPreviewEnabled()) void renderMarkdownPreview();
   setThemeButton();
   renderSettingsMenu();
   scheduleSessionSave();
@@ -1534,24 +1754,27 @@ function setWhitespace(value: RenderWhitespaceMode) {
   log(`空白符显示：${whitespaceLabel(state.renderWhitespace)}`);
 }
 
-function setMarkdownPreviewVisible(visible: boolean) {
-  const changed = state.showMarkdownPreview !== visible;
-  state.showMarkdownPreview = visible;
-  state.markdownPreviewPreferenceSet = true;
-  if (!changed) {
-    renderSettingsMenu();
-    scheduleSessionSave();
-    return;
-  }
-  renderMarkdownPreview();
-  renderChrome();
+function setMarkdownContentWidth(value: string) {
+  if (!isMarkdownContentWidth(value) || state.markdownContentWidth === value) return;
+  state.markdownContentWidth = value;
+  applyMarkdownContentWidth();
   renderSettingsMenu();
   scheduleSessionSave();
 }
 
-function toggleMarkdownPreviewPreference() {
-  setMarkdownPreviewVisible(!state.showMarkdownPreview);
-  log(`Markdown 分屏预览${state.showMarkdownPreview ? "已开启" : "已关闭"}`);
+function setMarkdownEditMode(mode: MarkdownEditMode) {
+  if (!isMarkdownEditMode(mode)) return;
+  if (state.markdownEditMode === "wysiwyg") {
+    syncMarkdownModelFromEditor();
+    markdownEditor?.hideFloatTools();
+  }
+  state.markdownEditMode = mode;
+  closeMenus();
+  renderMarkdownSurface();
+  renderChrome();
+  renderSettingsMenu();
+  scheduleSessionSave();
+  log(`Markdown 模式：${markdownEditModeLabel(mode)}`);
 }
 
 function bindWindowControls() {
@@ -1771,16 +1994,26 @@ function resolveTextInputDialog(value?: string | null) {
   textInputResolver = null;
 }
 
-async function withBusy<T>(message: string, task: () => Promise<T>): Promise<T> {
+async function withBusy<T>(
+  message: string,
+  task: () => Promise<T>,
+  options: { lockEditor?: boolean } = {},
+): Promise<T> {
+  const lockEditor = options.lockEditor !== false;
   busyDepth += 1;
+  if (lockEditor) editorBusyDepth += 1;
   setBusy(message);
   try {
     return await task();
   } finally {
     busyDepth -= 1;
+    if (lockEditor) editorBusyDepth -= 1;
     if (busyDepth <= 0) {
       busyDepth = 0;
+      editorBusyDepth = 0;
       setBusy("");
+    } else {
+      setBusy(state.busyMessage);
     }
   }
 }
@@ -1789,8 +2022,9 @@ function setBusy(message: string) {
   state.busyMessage = message;
   $("app").classList.toggle("is-busy", Boolean(message));
   if (editor) {
-    editor.updateOptions({ readOnly: Boolean(message) || activeDocument().readOnly });
+    editor.updateOptions({ readOnly: editorBusyDepth > 0 || activeDocument().readOnly });
   }
+  markdownEditor?.setReadOnly(editorBusyDepth > 0 || activeDocument().readOnly);
   renderChrome();
 }
 
@@ -1824,6 +2058,7 @@ function createDocument(
     renderChrome();
     renderMarkdownOutline();
     scheduleMarkdownPreviewRender();
+    if (doc.id === state.activeId) scheduleMarkdownEditorSync(doc);
     scheduleSessionSave();
   });
   return doc;
@@ -1853,6 +2088,7 @@ function activateDocument(id: number) {
   const doc = state.documents.find((item) => item.id === id);
   if (!doc) return;
   const previous = activeDocument();
+  if (previous && previous.id !== id) syncMarkdownModelFromEditor(previous);
   if (previous && previous.id !== id) previous.viewState = editor.saveViewState() ?? undefined;
   state.activeId = id;
   attachEditorModel(doc);
@@ -1931,6 +2167,7 @@ async function saveAsActive() {
 
 async function saveDocument(doc: OpenDocument, forceSaveAs: boolean) {
   if (!doc) return;
+  syncMarkdownModelFromEditor(doc);
   if (doc.readOnly) {
     log(`只读文档未保存：${doc.readOnlyReason ?? doc.title}`);
     return false;
@@ -1940,17 +2177,26 @@ async function saveDocument(doc: OpenDocument, forceSaveAs: boolean) {
     log("已取消保存");
     return false;
   }
+  const textToSave = doc.model.getValue();
   const saved = await withBusy(`保存 ${doc.title}`, () =>
     invoke<DocumentDto>("save_document", {
       request: {
         path,
-        text: doc.model.getValue(),
+        text: textToSave,
         encoding: doc.encoding,
         lineEnding: doc.lineEnding || "LF",
       },
     }),
+    { lockEditor: false },
   );
-  Object.assign(doc, saved, { dirty: false, savedText: saved.text, encodingStatus: "编码已识别" });
+  const currentText = doc.model.getValue();
+  Object.assign(doc, saved, {
+    dirty: currentText !== saved.text,
+    savedText: saved.text,
+    text: currentText,
+    fileSize: new Blob([currentText]).size,
+    encodingStatus: "编码已识别",
+  });
   doc.draftId = undefined;
   monaco.editor.setModelLanguage(doc.model, saved.language || "plaintext");
   renderAll();
@@ -2133,17 +2379,39 @@ function showContextMenu(menu: HTMLElement, event: MouseEvent, fallbackWidth: nu
   const maxTop = Math.max(48, window.innerHeight - height - 8);
   menu.style.left = `${Math.min(Math.max(8, event.clientX), maxLeft)}px`;
   menu.style.top = `${Math.min(Math.max(48, event.clientY), maxTop)}px`;
-  menu.querySelector<HTMLButtonElement>(".menu-row:not(:disabled)")?.focus();
+  contextMenuButtons(menu)[0]?.focus();
 }
 
 function activeContextMenu() {
-  return [$("tabMenu"), $("treeMenu"), $("fileMenu"), $("editMenu"), $("searchMenu"), $("viewMenu")].find(
+  return [
+    $("tabMenu"),
+    $("treeMenu"),
+    $("markdownContextMenu"),
+    $("fileMenu"),
+    $("editMenu"),
+    $("searchMenu"),
+    $("viewMenu"),
+  ].find(
     (menu) => !menu.classList.contains("hidden"),
   ) ?? null;
 }
 
 function contextMenuButtons(menu: HTMLElement) {
-  return Array.from(menu.querySelectorAll<HTMLButtonElement>(".menu-row:not(:disabled)"));
+  const focusedSubmenu = document.activeElement instanceof Element
+    ? document.activeElement.closest<HTMLElement>(".markdown-context-submenu")
+    : null;
+  const scopeSubmenu = menu.classList.contains("markdown-context-submenu")
+    ? menu
+    : focusedSubmenu && menu.contains(focusedSubmenu)
+      ? focusedSubmenu
+      : null;
+  return Array.from(menu.querySelectorAll<HTMLButtonElement>(
+    ".menu-row:not(:disabled), .markdown-context-control:not(:disabled)",
+  )).filter((button) => {
+    if (button.offsetParent === null) return false;
+    const ownerSubmenu = button.closest<HTMLElement>(".markdown-context-submenu");
+    return scopeSubmenu ? ownerSubmenu === scopeSubmenu : !ownerSubmenu;
+  });
 }
 
 function moveContextMenuFocus(menu: HTMLElement, delta: number) {
@@ -2159,12 +2427,39 @@ function handleContextMenuKeydown(event: KeyboardEvent) {
   if (!menu) return false;
   if (event.key === "Escape") {
     event.preventDefault();
+    const submenu = document.activeElement instanceof Element
+      ? document.activeElement.closest<HTMLElement>(".markdown-context-submenu")
+      : null;
+    if (menu.id === "markdownContextMenu" && submenu) {
+      closeMarkdownSubmenus();
+      menu.querySelectorAll<HTMLButtonElement>("[data-markdown-submenu]").forEach((trigger) => {
+        if (trigger.dataset.markdownSubmenu === submenu.id) trigger.focus();
+      });
+      return true;
+    }
     const trigger = menu.classList.contains("app-menu")
       ? $<HTMLButtonElement>(`${menu.id.replace("Menu", "MenuButton")}`)
       : null;
     closeMenus();
     trigger?.focus();
     return true;
+  }
+  if (menu.id === "markdownContextMenu" && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+    const button = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
+    const submenu = button?.closest<HTMLElement>(".markdown-context-submenu");
+    if (event.key === "ArrowRight" && button?.dataset.markdownSubmenu) {
+      event.preventDefault();
+      openMarkdownSubmenu(button, true);
+      return true;
+    }
+    if (event.key === "ArrowLeft" && submenu) {
+      event.preventDefault();
+      closeMarkdownSubmenus();
+      menu.querySelectorAll<HTMLButtonElement>("[data-markdown-submenu]").forEach((trigger) => {
+        if (trigger.dataset.markdownSubmenu === submenu.id) trigger.focus();
+      });
+      return true;
+    }
   }
   if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && menu.classList.contains("app-menu")) {
     event.preventDefault();
@@ -2189,7 +2484,7 @@ function handleContextMenuKeydown(event: KeyboardEvent) {
   }
   if (event.key === "Enter" || event.key === " ") {
     const button = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
-    if (button?.closest(".tab-menu, .tree-menu, .app-menu")) {
+    if (button?.closest(".tab-menu, .tree-menu, .app-menu, .markdown-context-menu")) {
       event.preventDefault();
       button.click();
       return true;
@@ -2635,30 +2930,46 @@ function convertEncoding(encoding: EncodingLabel) {
   log(`转为 ${encoding}，保存时写入`);
 }
 
-function findCurrent(showPanel = false) {
+function findCurrent(showPanel = false, recordHistory = true) {
   const query = ($("findInput") as HTMLInputElement).value;
   if (!query) {
     log("查找内容不能为空");
     return;
   }
-  commitSearchHistory();
+  if (recordHistory) commitSearchHistory();
   const doc = activeDocument();
   const matches = modelMatches(doc);
-  const activeIndex = initialSearchResultIndex(matches.length);
+  const activeMarkdownEditor = isMarkdownWysiwygActive(doc) ? markdownEditor : null;
+  let total = matches.length;
+  let activeIndex = initialSearchResultIndex(total);
+  if (activeMarkdownEditor) {
+    let result = activeMarkdownEditor.search(editorSearchQuery(query), markdownSearchOptions());
+    total = result.total;
+    activeIndex = initialSearchResultIndex(total);
+    if (activeIndex >= 0 && activeIndex !== result.index) {
+      result = activeMarkdownEditor.search(editorSearchQuery(query), {
+        ...markdownSearchOptions(),
+        highlightIndex: activeIndex,
+      });
+      activeIndex = result.index;
+    }
+  }
   setSearchResults({
-    total: matches.length,
+    total,
     skipped: [],
     hits: [
       {
         path: doc.path || doc.title,
         fileName: doc.title,
         encoding: doc.encoding,
-        matches,
+        matches: activeMarkdownEditor ? matches.slice(0, total) : matches,
       },
     ],
   }, "current", activeIndex, showPanel);
-  if (matches.length > 0) void openSearchResult(activeIndex);
-  log(`当前文件查找 ${matches.length} 个命中`);
+  if (!activeMarkdownEditor && matches.length > 0) {
+    void openSearchResult(activeIndex);
+  }
+  log(`当前文件查找 ${total} 个命中`);
 }
 
 function findOpenDocuments() {
@@ -2768,7 +3079,11 @@ async function findNextResult() {
     await rerunSearchForNavigation();
     return;
   }
-  await navigateSearchResult(searchDirection());
+  if (isMarkdownWysiwygActive() && markdownEditor && state.searchScope === "current") {
+    navigateMarkdownSearch(searchDirection());
+  } else {
+    await navigateSearchResult(searchDirection());
+  }
 }
 
 async function findPreviousResult() {
@@ -2786,7 +3101,25 @@ async function findPreviousResult() {
     await rerunSearchForNavigation();
     return;
   }
-  await navigateSearchResult(-searchDirection());
+  if (isMarkdownWysiwygActive() && markdownEditor && state.searchScope === "current") {
+    navigateMarkdownSearch(-searchDirection());
+  } else {
+    await navigateSearchResult(-searchDirection());
+  }
+}
+
+function navigateMarkdownSearch(delta: number) {
+  if (!markdownEditor) return;
+  const total = state.results?.total ?? 0;
+  const nextIndex = state.activeResultIndex + delta;
+  if (!$("wrapSearchInput").matches(":checked") && (nextIndex < 0 || nextIndex >= total)) {
+    log(delta > 0 ? "已经到最后一个命中" : "已经到第一个命中");
+    return;
+  }
+  const result = markdownEditor.find(delta > 0 ? "next" : "previous");
+  state.activeResultIndex = result.index;
+  renderCurrentFindCount();
+  renderSearchSidebarResults();
 }
 
 async function rerunSearchForNavigation() {
@@ -2818,6 +3151,14 @@ async function openSearchResult(index: number) {
   state.activeResultIndex = normalized;
   renderSearchSidebarResults();
   renderCurrentFindCount();
+  if (state.searchScope === "current" && isMarkdownWysiwygActive() && markdownEditor) {
+    markdownEditor.search(editorSearchQuery(state.searchQuery), {
+      ...markdownSearchOptions(),
+      highlightIndex: normalized,
+    });
+    scrollActiveResultIntoView();
+    return;
+  }
   await openResult(item.path, item.match.line, item.match.column);
   renderSearchDecorations();
   scrollActiveResultIntoView();
@@ -2843,7 +3184,7 @@ function clearSearchResults() {
   log("已清除查找结果");
 }
 
-function resetSearchResults() {
+function resetSearchResults(preserveMarkdownSelection = false) {
   state.results = null;
   state.searchScope = null;
   state.searchQuery = "";
@@ -2851,6 +3192,7 @@ function resetSearchResults() {
   state.activeResultIndex = -1;
   searchDecorations?.clear();
   activeSearchDecoration?.clear();
+  markdownEditor?.clearSearch(preserveMarkdownSelection);
   renderSearchSidebarResults();
   renderCurrentFindCount();
 }
@@ -2867,6 +3209,28 @@ function replaceCurrentFile() {
   if (!context) return;
   const { doc, model, query, replacement } = context;
   const matches = modelMatches(doc);
+  if (isMarkdownWysiwygActive(doc) && markdownEditor) {
+    const result = markdownEditor.search(editorSearchQuery(query), markdownSearchOptions());
+    if (result.total === 0) {
+      log("当前文件没有可替换内容");
+      return;
+    }
+    const activeIndex = state.activeResultIndex >= 0
+      ? Math.min(state.activeResultIndex, result.total - 1)
+      : initialSearchResultIndex(result.total);
+    markdownEditor.search(editorSearchQuery(query), { ...markdownSearchOptions(), highlightIndex: activeIndex });
+    markdownEditor.replace(
+      getSearchMode() === "extended" ? translateExtended(replacement) : replacement,
+      false,
+      getSearchMode() === "regex",
+    );
+    window.requestAnimationFrame(() => {
+      syncMarkdownModelFromEditor(doc);
+      findCurrent(false);
+    });
+    log("当前文件替换 1 处");
+    return;
+  }
   if (matches.length === 0) {
     log("当前文件没有可替换内容");
     return;
@@ -2889,6 +3253,24 @@ function replaceAllCurrentFile() {
   if (!context) return;
   const { doc, model, query, replacement } = context;
   const matches = modelMatches(doc);
+  if (isMarkdownWysiwygActive(doc) && markdownEditor) {
+    const result = markdownEditor.search(editorSearchQuery(query), { ...markdownSearchOptions(), highlightIndex: 0 });
+    if (result.total === 0) {
+      log("当前文件没有可替换内容");
+      return;
+    }
+    markdownEditor.replace(
+      getSearchMode() === "extended" ? translateExtended(replacement) : replacement,
+      true,
+      getSearchMode() === "regex",
+    );
+    window.requestAnimationFrame(() => {
+      syncMarkdownModelFromEditor(doc);
+      findCurrent(false);
+    });
+    log(`当前文件全部替换 ${result.total} 处`);
+    return;
+  }
   if (matches.length === 0) {
     log("当前文件没有可替换内容");
     return;
@@ -3150,7 +3532,7 @@ function modelMatches(doc: OpenDocument): TextMatchDto[] {
 
 function matchAllowed(doc: OpenDocument, match: monaco.editor.FindMatch) {
   const selectedRange = activeSearchSelectionRange(doc);
-  if (($("searchSelectionInput") as HTMLInputElement).checked) {
+  if (($("searchSelectionInput") as HTMLInputElement).checked && !isMarkdownWysiwygActive(doc)) {
     if (!selectedRange || !rangeContainsRange(selectedRange, match.range)) return false;
   }
   if (!($("wholeWordInput") as HTMLInputElement).checked) return true;
@@ -3184,6 +3566,7 @@ function comparePosition(lineA: number, columnA: number, lineB: number, columnB:
 
 function selectionSignature() {
   if (!($("searchSelectionInput") as HTMLInputElement).checked) return "all";
+  if (isMarkdownWysiwygActive() && markdownEditor) return markdownEditor.searchSelectionSignature();
   const selection = editor.getSelection();
   if (!selection || selection.isEmpty()) return "empty-selection";
   return [
@@ -3380,13 +3763,24 @@ function applyEditorPerformanceProfile(doc: OpenDocument) {
     wordBasedSuggestions: large ? "off" : "currentDocument",
     suggestOnTriggerCharacters: !large,
   });
+  markdownEditor?.updateAppearance(state.darkMode, state.fontSize, editorFont);
+  markdownEditor?.setReadOnly(editorBusyDepth > 0 || doc.readOnly);
+}
+
+function markdownSearchOptions(): MarkdownSearchOptions {
+  return {
+    matchCase: ($("matchCaseInput") as HTMLInputElement).checked,
+    wholeWord: ($("wholeWordInput") as HTMLInputElement).checked,
+    regex: getSearchMode() === "regex",
+    selectionOnly: ($("searchSelectionInput") as HTMLInputElement).checked,
+  };
 }
 
 function renderAll() {
   renderMenus();
   renderWorkspace();
   renderChrome();
-  renderMarkdownPreview();
+  renderMarkdownSurface();
   renderSearchDecorations();
   renderHistoryLists();
   renderRecentFiles();
@@ -3403,16 +3797,13 @@ function renderChrome() {
   setButtonLabel("encodingButton", doc.encoding, `编码 ${doc.encoding}`);
   $("encodingNotice").textContent = `${doc.encodingStatus} ${doc.encoding}`;
   setButtonLabel("lineEndingButton", doc.lineEnding || "LF", `行尾 ${doc.lineEnding || "LF"}`);
-  setButtonLabel(
-    "markdownPreviewButton",
-    "Markdown 分屏预览",
-    isMarkdownLikeDocument(doc)
-      ? `Markdown 分屏预览 ${state.showMarkdownPreview ? "已开启" : "已关闭"}`
-      : "Markdown 分屏预览：仅 Markdown 文档显示",
-  );
-  $("markdownPreviewButton").classList.toggle("active", isMarkdownPreviewEnabled(doc));
-  $<HTMLButtonElement>("markdownPreviewButton").disabled = !isMarkdownLikeDocument(doc);
-  $("markdownPreviewButton").setAttribute("aria-pressed", String(isMarkdownPreviewEnabled(doc)));
+  const markdownDocument = isMarkdownLikeDocument(doc);
+  $("markdownModeControl").classList.toggle("hidden", !markdownDocument);
+  document.querySelectorAll<HTMLButtonElement>("[data-markdown-mode]").forEach((button) => {
+    const active = markdownDocument && button.dataset.markdownMode === state.markdownEditMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
   $<HTMLButtonElement>("saveButton").disabled = doc.readOnly || (Boolean(doc.path) && !doc.dirty);
   $<HTMLButtonElement>("saveAsButton").disabled = doc.readOnly;
   $<HTMLButtonElement>("saveAllButton").disabled = !state.documents.some((item) => item.dirty && !item.readOnly);
@@ -3423,11 +3814,18 @@ function renderChrome() {
   $<HTMLButtonElement>("menuSaveAllButton").disabled = $<HTMLButtonElement>("saveAllButton").disabled;
   $<HTMLButtonElement>("menuUppercaseButton").disabled = doc.readOnly;
   $<HTMLButtonElement>("menuLowercaseButton").disabled = doc.readOnly;
-  $<HTMLButtonElement>("menuMarkdownButton").disabled = $<HTMLButtonElement>("markdownPreviewButton").disabled;
+  ["menuMarkdownWysiwygButton", "menuMarkdownSplitButton", "menuMarkdownSourceButton"].forEach((id) => {
+    $<HTMLButtonElement>(id).disabled = !markdownDocument;
+  });
   $<HTMLButtonElement>("menuCloseWorkspaceButton").disabled = !state.workspace;
   $("menuOutlineButton").classList.toggle("hidden", !isMarkdownLikeDocument(doc));
   $("menuWordWrapButton").classList.toggle("active", state.wordWrap);
-  $("menuMarkdownButton").classList.toggle("active", isMarkdownPreviewEnabled(doc));
+  ["wysiwyg", "split", "source"].forEach((mode) => {
+    const button = $<HTMLButtonElement>(`menuMarkdown${mode[0].toUpperCase()}${mode.slice(1)}Button`);
+    const active = markdownDocument && state.markdownEditMode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
   setThemeButton();
 
   const tabs = $("tabs");
@@ -3623,7 +4021,8 @@ function renderSettingsMenu() {
   setSegmentedValue("settingsWordWrapControl", state.wordWrap ? "on" : "off");
   setSegmentedValue("settingsMinimapControl", state.minimap ? "on" : "off");
   setSegmentedValue("settingsWhitespaceControl", state.renderWhitespace);
-  setSegmentedValue("settingsMarkdownControl", state.showMarkdownPreview ? "on" : "off");
+  setSegmentedValue("settingsMarkdownWidthControl", state.markdownContentWidth);
+  setSegmentedValue("settingsMarkdownControl", state.markdownEditMode);
   setSegmentedValue("settingsModeControl", state.mode === "workspace" && state.workspace ? "workspace" : "single");
 }
 
@@ -3788,8 +4187,10 @@ function resetEditorView() {
   state.editorFontMode = "preset";
   state.editorFontPreset = DEFAULT_EDITOR_FONT_PRESET;
   state.editorFontCustom = EDITOR_FONT_STACKS[DEFAULT_EDITOR_FONT_PRESET];
+  state.markdownContentWidth = "typora";
   applyShellFontSettings();
   applyEditorSettings();
+  applyMarkdownContentWidth();
   renderAll();
   scheduleSessionSave();
   log("视图和字体设置已重置");
@@ -3797,6 +4198,14 @@ function resetEditorView() {
 
 function applyEditorSettings() {
   applyEditorPerformanceProfile(activeDocument());
+}
+
+function applyMarkdownContentWidth() {
+  document.documentElement.dataset.markdownWidth = state.markdownContentWidth;
+}
+
+function isMarkdownContentWidth(value: unknown): value is MarkdownContentWidth {
+  return value === "typora" || value === "compact" || value === "wide" || value === "full";
 }
 
 function whitespaceLabel(value: RenderWhitespaceMode) {
@@ -3885,17 +4294,28 @@ function renderMarkdownOutline() {
     list.innerHTML = "";
     return;
   }
-  const headings = activeDocument().model.getLinesContent().flatMap((line, index) => {
-    const match = /^(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line.trim());
-    if (!match) return [];
-    return [{ level: match[1].length, text: match[2].trim(), line: index + 1 }];
-  });
+  const locations = markdownHeadingLocations(activeDocument().model.getValue());
+  const muyaOutline = isMarkdownWysiwygActive() ? markdownEditor?.getOutline() : null;
+  const headings = muyaOutline
+    ? muyaOutline.map((heading, index) => ({
+      ...heading,
+      line: locations[index]?.line ?? 1,
+    }))
+    : locations;
   summary.textContent = headings.length > 0 ? `${headings.length} 个标题` : "暂无标题";
   list.innerHTML = headings.length > 0
-    ? headings.map((heading) => `<button class="outline-row" data-outline-line="${heading.line}" style="--outline-level:${heading.level}"><span>${escapeHtml(heading.text)}</span><small>${heading.line}</small></button>`).join("")
+    ? headings.map((heading, index) => {
+      const indent = (heading.level - 1) * 14;
+      return `<button class="outline-row" role="treeitem" aria-level="${heading.level}" data-outline-line="${heading.line}" data-outline-index="${index}" data-outline-level="${heading.level}" style="--outline-indent:${indent}px"><span>${escapeHtml(heading.text)}</span><small>${heading.line}</small></button>`;
+    }).join("")
     : `<div class="empty">当前 Markdown 文档没有标题</div>`;
   list.querySelectorAll<HTMLButtonElement>("[data-outline-line]").forEach((button) => {
     button.addEventListener("click", () => {
+      if (isMarkdownWysiwygActive() && markdownEditor) {
+        markdownEditor.revealHeading(Number(button.dataset.outlineIndex ?? "0"));
+        markdownEditor.focus();
+        return;
+      }
       const lineNumber = Number(button.dataset.outlineLine ?? "1");
       editor.setPosition({ lineNumber, column: 1 });
       editor.revealLineInCenterIfOutsideViewport(lineNumber);
@@ -3976,11 +4396,269 @@ function rangeFromMatch(match: TextMatchDto) {
   );
 }
 
-function renderMarkdownPreview() {
+function renderMarkdownSurface() {
+  const doc = activeDocument();
+  const markdownDocument = isMarkdownLikeDocument(doc);
+  const wantsWysiwyg = markdownDocument && state.markdownEditMode === "wysiwyg";
+  if (wantsWysiwyg && !markdownEditor) void ensureMarkdownEditor(doc);
+
+  const showWysiwyg = wantsWysiwyg && Boolean(markdownEditor);
+  $("editor").classList.toggle("hidden", showWysiwyg);
+  $("markdownWysiwyg").classList.toggle("hidden", !showWysiwyg);
+  $("editor").parentElement?.classList.toggle("wysiwyg-open", showWysiwyg);
+
+  if (showWysiwyg) {
+    syncMarkdownEditorFromModel(doc);
+    markdownEditor?.setReadOnly(editorBusyDepth > 0 || doc.readOnly);
+    scheduleMarkdownImageRefresh();
+  } else {
+    markdownEditor?.hideFloatTools();
+  }
+  void renderMarkdownPreview();
+  requestEditorLayout();
+}
+
+async function ensureMarkdownEditor(doc: OpenDocument) {
+  if (markdownEditor) return markdownEditor;
+  if (!markdownEditorPromise) {
+    markdownEditorPromise = loadMarkdownModule()
+      .then(({ MarkdownEditorBridge }) => {
+        const bridge = new MarkdownEditorBridge({
+          element: $("markdownWysiwyg"),
+          markdown: doc.model.getValue(),
+          darkMode: state.darkMode,
+          fontSize: state.fontSize,
+          fontFamily: resolveEditorFontStack(),
+          readOnly: editorBusyDepth > 0 || doc.readOnly,
+          pickImagePath: pickMarkdownImagePath,
+          openLink: openMarkdownLink,
+          onHeadingAnchorCopied: (anchor) => log(`已复制标题锚点 ${anchor}`),
+          onChange: handleMarkdownEditorChange,
+        });
+        markdownEditor = bridge;
+        markdownEditorDocumentId = doc.id;
+        observeMarkdownImages(bridge.root);
+        return bridge;
+      })
+      .catch((error) => {
+        markdownEditorPromise = null;
+        log(`Markdown 即时编辑器加载失败：${String(error)}`);
+        throw error;
+      });
+  }
+  const bridge = await markdownEditorPromise;
+  const active = activeDocument();
+  if (isMarkdownLikeDocument(active) && state.markdownEditMode === "wysiwyg") {
+    syncMarkdownEditorFromModel(active, true);
+    renderMarkdownSurface();
+    bridge.focus();
+  }
+  return bridge;
+}
+
+function loadMarkdownModule() {
+  if (!markdownModulePromise) {
+    markdownModulePromise = import("./markdownEditor").catch((error) => {
+      markdownModulePromise = null;
+      throw error;
+    });
+  }
+  return markdownModulePromise;
+}
+
+function handleMarkdownEditorChange(markdown: string) {
+  const doc = state.documents.find((item) => item.id === markdownEditorDocumentId);
+  const modelMarkdown = doc ? markdownForDocumentModel(doc, markdown) : markdown;
+  if (
+    !doc ||
+    doc.id !== state.activeId ||
+    state.markdownEditMode !== "wysiwyg" ||
+    doc.readOnly ||
+    modelMarkdown === doc.model.getValue()
+  ) {
+    if (doc && modelMarkdown === doc.model.getValue()) markdownEditor?.markSynchronized(markdown);
+    return;
+  }
+  markdownSyncingFromEditor = true;
+  try {
+    replaceModelText(doc.model, modelMarkdown);
+  } finally {
+    markdownSyncingFromEditor = false;
+  }
+  markdownEditor?.markSynchronized(markdown);
+  scheduleMarkdownImageRefresh();
+}
+
+function replaceModelText(model: monaco.editor.ITextModel, nextText: string) {
+  const currentText = model.getValue();
+  if (currentText === nextText) return;
+
+  let prefix = 0;
+  const prefixLimit = Math.min(currentText.length, nextText.length);
+  while (prefix < prefixLimit && currentText.charCodeAt(prefix) === nextText.charCodeAt(prefix)) prefix += 1;
+
+  let suffix = 0;
+  const suffixLimit = Math.min(currentText.length - prefix, nextText.length - prefix);
+  while (
+    suffix < suffixLimit &&
+    currentText.charCodeAt(currentText.length - suffix - 1) === nextText.charCodeAt(nextText.length - suffix - 1)
+  ) {
+    suffix += 1;
+  }
+
+  const start = model.getPositionAt(prefix);
+  const end = model.getPositionAt(currentText.length - suffix);
+  model.pushEditOperations(
+    [],
+    [{
+      range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
+      text: nextText.slice(prefix, nextText.length - suffix),
+    }],
+    () => null,
+  );
+}
+
+function markdownForDocumentModel(doc: OpenDocument, markdown: string) {
+  const normalized = markdown.replace(/\r\n?/g, "\n");
+  return doc.model.getEOL() === "\r\n" ? normalized.replace(/\n/g, "\r\n") : normalized;
+}
+
+function syncMarkdownModelFromEditor(doc = activeDocument()) {
+  if (
+    !markdownEditor ||
+    state.markdownEditMode !== "wysiwyg" ||
+    state.activeId !== doc.id ||
+    markdownEditorDocumentId !== doc.id ||
+    doc.readOnly
+  ) {
+    return;
+  }
+  const editorMarkdown = markdownEditor.getMarkdown();
+  if (!markdownEditor.hasUnsynchronizedChanges()) return;
+  const markdown = markdownForDocumentModel(doc, editorMarkdown);
+  if (markdown === doc.model.getValue()) {
+    markdownEditor.markSynchronized(editorMarkdown);
+    return;
+  }
+  markdownSyncingFromEditor = true;
+  try {
+    replaceModelText(doc.model, markdown);
+  } finally {
+    markdownSyncingFromEditor = false;
+  }
+  markdownEditor.markSynchronized(editorMarkdown);
+}
+
+function syncMarkdownEditorFromModel(doc = activeDocument(), focus = false) {
+  if (!markdownEditor || !isMarkdownLikeDocument(doc)) return;
+  const preserveHistory = markdownEditorDocumentId === doc.id;
+  markdownEditorDocumentId = doc.id;
+  markdownEditor.setMarkdown(doc.model.getValue(), focus, preserveHistory);
+  markdownEditor.setReadOnly(editorBusyDepth > 0 || doc.readOnly);
+}
+
+function scheduleMarkdownEditorSync(doc = activeDocument()) {
+  if (
+    markdownSyncingFromEditor ||
+    doc.id !== state.activeId ||
+    !isMarkdownLikeDocument(doc) ||
+    state.markdownEditMode !== "wysiwyg"
+  ) {
+    return;
+  }
+  window.clearTimeout(markdownModelSyncTimer);
+  markdownModelSyncTimer = window.setTimeout(() => {
+    if (doc.id === state.activeId && state.markdownEditMode === "wysiwyg") {
+      syncMarkdownEditorFromModel(doc);
+    }
+  }, 60);
+}
+
+function observeMarkdownImages(root: HTMLElement) {
+  markdownImageObserver?.disconnect();
+  markdownImageObserver = new MutationObserver(scheduleMarkdownImageRefresh);
+  markdownImageObserver.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
+  scheduleMarkdownImageRefresh();
+}
+
+function scheduleMarkdownImageRefresh() {
+  window.cancelAnimationFrame(markdownImageRefreshFrame);
+  markdownImageRefreshFrame = window.requestAnimationFrame(refreshMarkdownImages);
+}
+
+function refreshMarkdownImages() {
+  if (!markdownEditor || markdownEditorDocumentId !== activeDocument().id) return;
+  refreshMarkdownResources(markdownEditor.root, activeDocument());
+}
+
+function refreshMarkdownResources(root: ParentNode, doc: OpenDocument) {
+  root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+    const current = image.getAttribute("src") ?? "";
+    const stored = image.dataset.notraSource;
+    if (/^(?:https?:|data:|blob:|asset:)/i.test(current) && !stored) return;
+    if (/^https?:\/\/asset\.localhost\//i.test(current) && stored) return;
+    const source = stored && /^https?:\/\/asset\.localhost\//i.test(current) ? stored : current;
+    if (!source || /^(?:https?:|data:|blob:|asset:)/i.test(source)) return;
+    const absolute = absoluteMarkdownResourcePath(source.split(/[?#]/, 1)[0], doc);
+    if (!absolute) return;
+    image.dataset.notraSource = source;
+    const converted = convertFileSrc(absolute);
+    if (current !== converted) image.setAttribute("src", converted);
+  });
+}
+
+function markdownHeadingLocations(markdown: string) {
+  const lines = markdown.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const headings: Array<{ level: number; text: string; line: number }> = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (
+        fenceMatch &&
+        fenceMatch[1][0] === fence.marker &&
+        fenceMatch[1].length >= fence.length &&
+        fenceMatch[2].trim() === ""
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMatch) {
+      fence = {
+        marker: fenceMatch[1][0] as "`" | "~",
+        length: fenceMatch[1].length,
+      };
+      continue;
+    }
+    if (/^(?: {4}|\t)/.test(line)) continue;
+
+    const atx = /^ {0,3}(#{1,6})(?:[ \t]+(.*?)|[ \t]*)$/.exec(line);
+    if (atx) {
+      const text = (atx[2] ?? "").replace(/[ \t]+#+[ \t]*$/, "").trim();
+      if (text) headings.push({ level: atx[1].length, text, line: index + 1 });
+      continue;
+    }
+
+    const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(lines[index + 1] ?? "");
+    const text = line.trim();
+    if (text && underline) {
+      headings.push({ level: underline[1][0] === "=" ? 1 : 2, text, line: index + 1 });
+      index += 1;
+    }
+  }
+
+  return headings;
+}
+
+async function renderMarkdownPreview() {
   const doc = activeDocument();
   const preview = $("markdownPreview");
   const editorArea = preview.parentElement;
   const enabled = isMarkdownPreviewEnabled(doc);
+  const renderVersion = ++markdownPreviewRenderVersion;
   editorArea?.classList.toggle("preview-open", enabled);
   preview.classList.toggle("hidden", !enabled);
   if (!enabled) {
@@ -3989,10 +4667,50 @@ function renderMarkdownPreview() {
     return;
   }
   const source = doc.model.getValue();
-  const body = source.trim()
-    ? renderMarkdown(source)
-    : `<div class="markdown-preview-empty">空白 Markdown</div>`;
-  preview.innerHTML = `
+  if (!source.trim()) {
+    preview.innerHTML = markdownPreviewShell(doc, source, `<div class="markdown-preview-empty">空白 Markdown</div>`);
+    requestEditorLayout();
+    return;
+  }
+
+  const previousDocumentId = preview.dataset.documentId;
+  preview.dataset.documentId = String(doc.id);
+  if (!preview.querySelector(".markdown-preview-body") || previousDocumentId !== String(doc.id)) {
+    preview.innerHTML = markdownPreviewShell(doc, source, `<div class="markdown-preview-empty">正在生成预览</div>`);
+  }
+  requestEditorLayout();
+
+  try {
+    const { renderMarkdownPreviewDiagrams, renderMarkdownPreviewHtml } = await loadMarkdownModule();
+    const body = renderMarkdownPreviewHtml(source, { darkMode: state.darkMode });
+    if (!isCurrentMarkdownPreview(renderVersion, doc, source)) return;
+    preview.innerHTML = markdownPreviewShell(doc, source, body);
+    const previewBody = preview.querySelector<HTMLElement>(".markdown-preview-body");
+    if (previewBody) {
+      refreshMarkdownResources(previewBody, doc);
+      void renderMarkdownPreviewDiagrams(previewBody, { darkMode: state.darkMode })
+        .then(() => {
+          if (!isCurrentMarkdownPreview(renderVersion, doc, source)) return;
+          refreshMarkdownResources(previewBody, doc);
+          requestEditorLayout();
+        })
+        .catch((error) => {
+          if (isCurrentMarkdownPreview(renderVersion, doc, source)) {
+            log(`Markdown 图表预览失败：${error instanceof Error ? error.message : String(error)}`);
+          }
+        });
+    }
+    requestEditorLayout();
+    window.requestAnimationFrame(syncMarkdownPreviewScroll);
+  } catch (error) {
+    if (!isCurrentMarkdownPreview(renderVersion, doc, source)) return;
+    preview.innerHTML = markdownPreviewShell(doc, source, `<div class="markdown-preview-empty">预览生成失败</div>`);
+    log(`Markdown 预览失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function markdownPreviewShell(doc: OpenDocument, source: string, body: string) {
+  return `
     <header class="markdown-preview-head">
       <div>
         <strong>预览</strong>
@@ -4002,13 +4720,39 @@ function renderMarkdownPreview() {
     </header>
     <div class="markdown-preview-body">${body}</div>
   `;
-  requestEditorLayout();
-  window.requestAnimationFrame(syncMarkdownPreviewScroll);
+}
+
+function isCurrentMarkdownPreview(renderVersion: number, doc: OpenDocument, source: string) {
+  const active = activeDocument();
+  return (
+    renderVersion === markdownPreviewRenderVersion &&
+    active.id === doc.id &&
+    active.model.getValue() === source &&
+    isMarkdownPreviewEnabled(active)
+  );
+}
+
+function handleMarkdownPreviewClick(event: Event) {
+  const anchor = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+  if (!anchor || !$("markdownPreview").contains(anchor)) return;
+  event.preventDefault();
+  const href = anchor.getAttribute("href") ?? "";
+  if (href.startsWith("#")) {
+    let id = href.slice(1);
+    try {
+      id = decodeURIComponent(id);
+    } catch {
+      return;
+    }
+    $("markdownPreview").querySelector<HTMLElement>(`#${CSS.escape(id)}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    return;
+  }
+  openMarkdownLink(href);
 }
 
 function scheduleMarkdownPreviewRender() {
   window.clearTimeout(markdownPreviewTimer);
-  markdownPreviewTimer = window.setTimeout(renderMarkdownPreview, 80);
+  markdownPreviewTimer = window.setTimeout(() => void renderMarkdownPreview(), 100);
 }
 
 function requestEditorLayout() {
@@ -4072,7 +4816,21 @@ function syncMarkdownPreviewScroll() {
 }
 
 function isMarkdownPreviewEnabled(doc = activeDocument()) {
-  return state.showMarkdownPreview && isMarkdownLikeDocument(doc);
+  return state.markdownEditMode === "split" && isMarkdownLikeDocument(doc);
+}
+
+function isMarkdownWysiwygActive(doc = activeDocument()) {
+  return state.markdownEditMode === "wysiwyg" && isMarkdownLikeDocument(doc) && markdownEditorDocumentId === doc.id;
+}
+
+function isMarkdownEditMode(value: unknown): value is MarkdownEditMode {
+  return value === "wysiwyg" || value === "split" || value === "source";
+}
+
+function markdownEditModeLabel(mode: MarkdownEditMode) {
+  if (mode === "wysiwyg") return "即时编辑";
+  if (mode === "split") return "分屏预览";
+  return "源码";
 }
 
 function isMarkdownLikeDocument(doc = activeDocument()) {
@@ -4133,6 +4891,10 @@ function isWorkspaceFindView(view = state.findView) {
 function toggleFindOpen(options: { prefillFromSelection?: boolean } = {}) {
   const workspace = isWorkspaceFindView();
   const input = $(workspace ? "findInput" : "currentFindInput") as HTMLInputElement;
+  const currentFindAlreadyOpen = !$("currentFindDock").classList.contains("hidden");
+  if (!workspace && !currentFindAlreadyOpen && isMarkdownWysiwygActive() && markdownEditor) {
+    markdownEditor.captureSearchSelection();
+  }
   if (!workspace) syncSearchControlsToCurrent();
   if (options.prefillFromSelection) {
     const selectedText = selectedEditorTextForFind();
@@ -4157,6 +4919,20 @@ function toggleFindOpen(options: { prefillFromSelection?: boolean } = {}) {
   }
   input.focus();
   input.select();
+  if (!workspace) scheduleCurrentFind();
+}
+
+function scheduleCurrentFind() {
+  syncCurrentFindControls();
+  window.clearTimeout(currentFindTimer);
+  currentFindTimer = window.setTimeout(() => {
+    if ($("currentFindDock").classList.contains("hidden")) return;
+    if (!(($("currentFindInput") as HTMLInputElement).value)) {
+      resetSearchResults(true);
+      return;
+    }
+    findCurrent(false, false);
+  }, 90);
 }
 
 function syncSearchControlsToCurrent() {
@@ -4198,8 +4974,9 @@ function renderCurrentFindCount() {
 function closeFind() {
   if (!$("currentFindDock").classList.contains("hidden")) {
     $("currentFindDock").classList.add("hidden");
+    resetSearchResults();
     requestEditorLayout();
-    editor.focus();
+    focusActiveEditor();
     return;
   }
   closeRightSidebar();
@@ -4210,8 +4987,13 @@ function closeRightSidebar() {
   $("app").classList.remove("right-sidebar-open");
   renderRightSidebarToggle();
   requestEditorLayout();
-  editor.focus();
+  focusActiveEditor();
   scheduleSessionSave();
+}
+
+function focusActiveEditor() {
+  if (isMarkdownWysiwygActive() && markdownEditor) markdownEditor.focus();
+  else editor.focus();
 }
 
 function toggleRightSidebar() {
@@ -4289,6 +5071,11 @@ function renderRightSidebar() {
 }
 
 function selectedEditorTextForFind() {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    const normalized = markdownEditor.selectedText().replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    if (!normalized || normalized.includes("\n") || normalized.trim().length === 0) return "";
+    return normalized.slice(0, 300);
+  }
   const selection = editor.getSelection();
   const model = editor.getModel();
   if (!selection || selection.isEmpty() || !model) return "";
@@ -4378,6 +5165,8 @@ function closeMenus() {
   $("recentMenu").classList.add("hidden");
   $("tabMenu").classList.add("hidden");
   $("treeMenu").classList.add("hidden");
+  $("markdownContextMenu").classList.add("hidden");
+  closeMarkdownSubmenus();
   $("fileMenu").classList.add("hidden");
   $("editMenu").classList.add("hidden");
   $("searchMenu").classList.add("hidden");
@@ -4427,9 +5216,54 @@ function openCommandPalette() {
 }
 
 function runEditorAction(actionId: string, successMessage?: string) {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    if (actionId === "editor.action.selectAll") {
+      markdownEditor.selectAll();
+      return;
+    }
+    const clipboardCommands: Record<string, string> = {
+      "editor.action.clipboardCopyAction": "copy",
+      "editor.action.clipboardCutAction": "cut",
+      "editor.action.clipboardPasteAction": "paste",
+    };
+    const clipboardCommand = clipboardCommands[actionId];
+    if (clipboardCommand) {
+      markdownEditor.focus();
+      document.execCommand(clipboardCommand);
+      return;
+    }
+  }
   editor.trigger("command", actionId, null);
   editor.focus();
   if (successMessage) log(successMessage);
+}
+
+function undoEditor() {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    markdownEditor.undo();
+    markdownEditor.focus();
+    return;
+  }
+  editor.trigger("command", "undo", null);
+  editor.focus();
+}
+
+function redoEditor() {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    markdownEditor.redo();
+    markdownEditor.focus();
+    return;
+  }
+  editor.trigger("command", "redo", null);
+  editor.focus();
+}
+
+function selectAllEditor() {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    markdownEditor.selectAll();
+    return;
+  }
+  runEditorAction("editor.action.selectAll");
 }
 
 function transformToUppercase() {
@@ -4504,8 +5338,10 @@ function renderCommandList(query: string) {
     ["查找上一个", () => void findPreviousResult()],
     ["当前文件中查找", () => findCurrent(true)],
     ["清除查找结果", clearSearchResults],
-    ["Markdown 分屏预览", toggleMarkdownPreviewPreference],
-    ["全选", () => runEditorAction("editor.action.selectAll")],
+    ["Markdown 即时编辑", () => setMarkdownEditMode("wysiwyg")],
+    ["Markdown 分屏预览", () => setMarkdownEditMode("split")],
+    ["Markdown 源码", () => setMarkdownEditMode("source")],
+    ["全选", selectAllEditor],
     ["复制", () => runEditorAction("editor.action.clipboardCopyAction")],
     ["剪切", () => runEditorAction("editor.action.clipboardCutAction")],
     ["粘贴", () => runEditorAction("editor.action.clipboardPasteAction")],
@@ -4596,10 +5432,14 @@ async function restoreSession() {
     state.rightTool = snapshot.rightTool === "outline" ? "outline" : "search";
     state.rightSidebarWidth = snapshot.rightSidebarWidth ?? state.rightSidebarWidth;
     setRightSidebarWidth(state.rightSidebarWidth);
-    state.markdownPreviewPreferenceSet = snapshot.markdownPreviewPreferenceSet ?? false;
-    state.showMarkdownPreview = state.markdownPreviewPreferenceSet
-      ? snapshot.showMarkdownPreview ?? state.showMarkdownPreview
-      : true;
+    state.markdownEditMode = isMarkdownEditMode(snapshot.markdownEditMode)
+      ? snapshot.markdownEditMode
+      : snapshot.markdownPreviewPreferenceSet
+        ? snapshot.showMarkdownPreview ? "split" : "source"
+        : "wysiwyg";
+    state.markdownContentWidth = isMarkdownContentWidth(snapshot.markdownContentWidth)
+      ? snapshot.markdownContentWidth
+      : "typora";
     state.wordWrap = snapshot.wordWrap ?? state.wordWrap;
     state.minimap = snapshot.minimap ?? state.minimap;
     state.renderWhitespace = snapshot.renderWhitespace ?? state.renderWhitespace;
@@ -4613,6 +5453,7 @@ async function restoreSession() {
     state.editorFontCustom = normalizeFontStack(snapshot.editorFontCustom, state.editorFontCustom);
     applyShellFontSettings();
     applyEditorSettings();
+    applyMarkdownContentWidth();
 
     applySearchSnapshot(snapshot);
     setFindView(state.findView, false);
@@ -4830,10 +5671,11 @@ function scheduleSessionSave() {
 async function saveSession() {
   if (state.restoring) return;
   const activeBeforeSave = activeDocument();
+  if (activeBeforeSave) syncMarkdownModelFromEditor(activeBeforeSave);
   if (activeBeforeSave) activeBeforeSave.viewState = editor.saveViewState() ?? undefined;
   const active = activeDocument();
   const snapshot: SessionSnapshot = {
-    version: 4,
+    version: 5,
     openFiles: uniquePaths(state.documents.flatMap((doc) => (doc.path ? [doc.path] : []))),
     draftDocuments: draftDocumentSnapshots(),
     documentOrigins: Object.fromEntries(
@@ -4855,8 +5697,8 @@ async function saveSession() {
     rightTool: state.rightTool,
     rightSidebarWidth: state.rightSidebarWidth,
     treeScrollTop: $("tree").scrollTop,
-    showMarkdownPreview: state.showMarkdownPreview,
-    markdownPreviewPreferenceSet: state.markdownPreviewPreferenceSet,
+    markdownEditMode: state.markdownEditMode,
+    markdownContentWidth: state.markdownContentWidth,
     searchHistory: state.searchHistory.slice(0, 30),
     replaceHistory: state.replaceHistory.slice(0, 30),
     searchFavorites: state.searchFavorites.slice(0, 30),
@@ -5052,260 +5894,6 @@ function defineThemes() {
   });
 }
 
-function renderMarkdown(source: string) {
-  const lines = source.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-  const html: string[] = [];
-  let paragraph: string[] = [];
-  let blockquote: string[] = [];
-  let listType: MarkdownListType | null = null;
-  let inCode = false;
-  let codeLanguage = "";
-  let codeLines: string[] = [];
-
-  const flushParagraph = () => {
-    if (paragraph.length === 0) return;
-    html.push(`<p>${renderInlineMarkdown(paragraph.join(" "))}</p>`);
-    paragraph = [];
-  };
-
-  const closeList = () => {
-    if (!listType) return;
-    html.push(`</${listType}>`);
-    listType = null;
-  };
-
-  const flushBlockquote = () => {
-    if (blockquote.length === 0) return;
-    const content = blockquote
-      .map((line) => (line.trim() ? `<p>${renderInlineMarkdown(line.trim())}</p>` : "<br>"))
-      .join("");
-    html.push(`<blockquote>${content}</blockquote>`);
-    blockquote = [];
-  };
-
-  const closeCode = () => {
-    const language = codeLanguage ? ` data-language="${escapeAttr(codeLanguage)}"` : "";
-    html.push(`<pre><code${language}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-    inCode = false;
-    codeLanguage = "";
-    codeLines = [];
-  };
-
-  const openList = (type: MarkdownListType) => {
-    if (listType === type) return;
-    closeList();
-    html.push(`<${type}>`);
-    listType = type;
-  };
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    const trimmed = line.trim();
-
-    if (inCode) {
-      if (trimmed.startsWith("```")) {
-        closeCode();
-      } else {
-        codeLines.push(line);
-      }
-      continue;
-    }
-
-    const fence = trimmed.match(/^```(\S*)\s*$/);
-    if (fence) {
-      flushParagraph();
-      closeList();
-      flushBlockquote();
-      inCode = true;
-      codeLanguage = fence[1] ?? "";
-      codeLines = [];
-      continue;
-    }
-
-    if (!trimmed) {
-      flushParagraph();
-      closeList();
-      flushBlockquote();
-      continue;
-    }
-
-    if (isMarkdownTable(lines, index)) {
-      flushParagraph();
-      closeList();
-      flushBlockquote();
-      const table = renderMarkdownTable(lines, index);
-      html.push(table.html);
-      index = table.nextIndex - 1;
-      continue;
-    }
-
-    const heading = trimmed.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      flushParagraph();
-      closeList();
-      flushBlockquote();
-      const level = heading[1].length;
-      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-      continue;
-    }
-
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
-      flushParagraph();
-      closeList();
-      flushBlockquote();
-      html.push("<hr>");
-      continue;
-    }
-
-    const quote = line.match(/^\s*>\s?(.*)$/);
-    if (quote) {
-      flushParagraph();
-      closeList();
-      blockquote.push(quote[1]);
-      continue;
-    }
-
-    const unordered = line.match(/^\s*[-*+]\s+(?:\[([ xX])\]\s+)?(.+)$/);
-    if (unordered) {
-      flushParagraph();
-      flushBlockquote();
-      openList("ul");
-      const isTask = typeof unordered[1] === "string";
-      const checked = isTask && unordered[1].toLowerCase() === "x";
-      const checkbox = isTask ? `<input type="checkbox" disabled${checked ? " checked" : ""}>` : "";
-      html.push(`<li${isTask ? ' class="task-item"' : ""}>${checkbox}<span>${renderInlineMarkdown(unordered[2])}</span></li>`);
-      continue;
-    }
-
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    if (ordered) {
-      flushParagraph();
-      flushBlockquote();
-      openList("ol");
-      html.push(`<li><span>${renderInlineMarkdown(ordered[1])}</span></li>`);
-      continue;
-    }
-
-    closeList();
-    flushBlockquote();
-    paragraph.push(trimmed);
-  }
-
-  if (inCode) closeCode();
-  flushParagraph();
-  closeList();
-  flushBlockquote();
-  return html.join("");
-}
-
-function renderInlineMarkdown(source: string) {
-  const tokens: string[] = [];
-  const stash = (html: string) => {
-    const token = `@@NOTRA_INLINE_${tokens.length}@@`;
-    tokens.push(html);
-    return token;
-  };
-
-  let text = source
-    .replace(/`([^`]+)`/g, (_match, code: string) => stash(`<code>${escapeHtml(code)}</code>`))
-    .replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g, (_match, alt: string, url: string, title: string | undefined) => {
-      const safeUrl = safeMarkdownUrl(url, true);
-      if (!safeUrl) return alt;
-      const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
-      return stash(`<img src="${escapeAttr(safeUrl)}" alt="${escapeAttr(alt)}"${titleAttr} loading="lazy">`);
-    })
-    .replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]+)")?\)/g, (_match, label: string, url: string, title: string | undefined) => {
-      const safeUrl = safeMarkdownUrl(url);
-      if (!safeUrl) return label;
-      const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
-      return stash(`<a href="${escapeAttr(safeUrl)}"${titleAttr} target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`);
-    });
-
-  text = escapeHtml(text)
-    .replace(/~~(.+?)~~/g, "<del>$1</del>")
-    .replace(/(\*\*|__)(.+?)\1/g, "<strong>$2</strong>")
-    .replace(/(\*|_)([^*_]+?)\1/g, "<em>$2</em>");
-
-  tokens.forEach((html, index) => {
-    text = text.replaceAll(`@@NOTRA_INLINE_${index}@@`, html);
-  });
-  return text;
-}
-
-function isMarkdownTable(lines: string[], index: number) {
-  return Boolean(lines[index + 1]) && hasTableCells(lines[index]) && isMarkdownTableDivider(lines[index + 1]);
-}
-
-function renderMarkdownTable(lines: string[], index: number) {
-  const headers = splitTableRow(lines[index]);
-  const alignments = splitTableRow(lines[index + 1]).map(parseTableAlignment);
-  const rows: string[][] = [];
-  let nextIndex = index + 2;
-
-  while (nextIndex < lines.length && hasTableCells(lines[nextIndex]) && !isMarkdownTableDivider(lines[nextIndex])) {
-    rows.push(splitTableRow(lines[nextIndex]));
-    nextIndex += 1;
-  }
-
-  const head = headers
-    .map((cell, cellIndex) => `<th${alignmentClass(alignments[cellIndex])}>${renderInlineMarkdown(cell)}</th>`)
-    .join("");
-  const body = rows
-    .map((row) => {
-      const cells = headers
-        .map((_, cellIndex) => `<td${alignmentClass(alignments[cellIndex])}>${renderInlineMarkdown(row[cellIndex] ?? "")}</td>`)
-        .join("");
-      return `<tr>${cells}</tr>`;
-    })
-    .join("");
-
-  return {
-    html: `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`,
-    nextIndex,
-  };
-}
-
-function hasTableCells(line: string) {
-  return line.includes("|") && splitTableRow(line).length > 1;
-}
-
-function splitTableRow(line: string) {
-  let trimmed = line.trim();
-  if (trimmed.startsWith("|")) trimmed = trimmed.slice(1);
-  if (trimmed.endsWith("|")) trimmed = trimmed.slice(0, -1);
-  return trimmed.split("|").map((cell) => cell.trim());
-}
-
-function isMarkdownTableDivider(line: string) {
-  const cells = splitTableRow(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
-}
-
-function parseTableAlignment(cell: string): MarkdownTableAlign {
-  const trimmed = cell.trim();
-  const left = trimmed.startsWith(":");
-  const right = trimmed.endsWith(":");
-  if (left && right) return "center";
-  if (right) return "right";
-  if (left) return "left";
-  return "";
-}
-
-function alignmentClass(align: MarkdownTableAlign) {
-  return align ? ` class="align-${align}"` : "";
-}
-
-function safeMarkdownUrl(value: string, image = false) {
-  const url = value.trim().replace(/^<(.+)>$/, "$1");
-  if (!url) return null;
-  if (/^https?:/i.test(url)) return url;
-  if (!image && /^mailto:/i.test(url)) return url;
-  if (url.startsWith("#") || url.startsWith("/") || url.startsWith("./") || url.startsWith("../")) return url;
-  if (image && /^data:image\/(png|jpeg|gif|webp);base64,/i.test(url)) return url;
-  if (!/^[a-z][a-z0-9+.-]*:/i.test(url)) return url;
-  return null;
-}
-
 function languageLabel(language: string) {
   return languageOptions().find(([id]) => id === language)?.[1] ?? humanizeLanguageId(language);
 }
@@ -5347,6 +5935,66 @@ function pathDirectory(path: string) {
   const index = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
   if (index === 2 && path[1] === ":") return path.slice(0, 3);
   return index > 0 ? path.slice(0, index) : path;
+}
+
+async function pickMarkdownImagePath() {
+  const path = await invoke<string | null>("pick_file_path", {
+    request: { defaultDir: preferredDialogDirectory() },
+  });
+  if (!path) return "";
+  const doc = activeDocument();
+  return doc.path ? relativeMarkdownPath(pathDirectory(doc.path), path) : path.replace(/\\/g, "/");
+}
+
+function openMarkdownLink(href: string) {
+  const target = href.trim();
+  if (!target || target.startsWith("#")) return;
+  if (/^(?:https?|mailto):/i.test(target)) {
+    window.open(target, "_blank", "noopener,noreferrer");
+    return;
+  }
+  if (/^[a-z][a-z\d+.-]*:/i.test(target) && !/^file:/i.test(target)) return;
+  const path = absoluteMarkdownResourcePath(target.split(/[?#]/, 1)[0], activeDocument());
+  if (path) void openPath(path, true);
+}
+
+function absoluteMarkdownResourcePath(source: string, doc: OpenDocument) {
+  let value = source.trim().replace(/^<|>$/g, "");
+  if (!value) return "";
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // 原路径可能包含不完整的百分号，按原值处理。
+  }
+  value = value.replace(/^file:\/\/\/?/i, "");
+  if (/^\/[a-z]:/i.test(value)) value = value.slice(1);
+  if (/^(?:[a-z]:[\\/]|\\\\)/i.test(value)) return value.replace(/\//g, "\\");
+  const base = doc.path ? pathDirectory(doc.path) : state.workspace?.root;
+  if (!base) return "";
+  return `${base.replace(/[\\/]+$/g, "")}\\${value.replace(/\//g, "\\").replace(/^[\\]+/, "")}`;
+}
+
+function relativeMarkdownPath(fromDirectory: string, targetPath: string) {
+  const from = fromDirectory.replace(/\//g, "\\").replace(/\\+$/g, "");
+  const target = targetPath.replace(/\//g, "\\");
+  const fromDrive = /^[a-z]:/i.exec(from)?.[0]?.toLowerCase();
+  const targetDrive = /^[a-z]:/i.exec(target)?.[0]?.toLowerCase();
+  if (fromDrive !== targetDrive) return target.replace(/\\/g, "/");
+
+  const fromParts = from.split(/\\+/).filter(Boolean);
+  const targetParts = target.split(/\\+/).filter(Boolean);
+  let common = 0;
+  while (
+    common < fromParts.length &&
+    common < targetParts.length &&
+    fromParts[common].toLowerCase() === targetParts[common].toLowerCase()
+  ) {
+    common += 1;
+  }
+  return [
+    ...Array.from({ length: fromParts.length - common }, () => ".."),
+    ...targetParts.slice(common),
+  ].join("/") || fileNameFromPath(target);
 }
 
 function normalizePathForCompare(path: string) {

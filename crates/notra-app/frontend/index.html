@@ -100,6 +100,7 @@
         <div class="tool-group primary-actions" aria-label="常用工具">
           <button class="tool-button" id="newButton" aria-label="新建 Ctrl+N" title="新建 Ctrl+N" aria-keyshortcuts="Control+N"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
           <button class="tool-button" id="openButton" aria-label="打开文件 Ctrl+O" title="打开文件 Ctrl+O" aria-keyshortcuts="Control+O"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
+          <button class="tool-button" id="workspaceButton" aria-label="打开工作区" title="打开工作区"><span class="icon-slot" data-icon="FolderTree"></span><span data-label>打开工作区</span></button>
           <button class="tool-button" id="recentButton" data-menu-trigger aria-label="最近打开" title="最近打开" aria-haspopup="menu"><span class="icon-slot" data-icon="History"></span><span data-label>最近打开</span></button>
           <span class="tool-divider"></span>
           <button class="tool-button" id="saveButton" aria-label="保存 Ctrl+S" title="保存 Ctrl+S" aria-keyshortcuts="Control+S"><span class="icon-slot" data-icon="Save"></span><span data-label>保存</span></button>
@@ -117,7 +118,11 @@
           <button class="tool-button" id="commandButton" aria-label="命令面板 Ctrl+P" title="命令面板 Ctrl+P" aria-keyshortcuts="Control+P"><span class="icon-slot" data-icon="Command"></span><span data-label>命令面板</span></button>
           <span class="tool-divider"></span>
           <button class="tool-button" id="wordWrapButton" aria-label="自动换行" title="自动换行" aria-pressed="false"><span class="icon-slot" data-icon="WrapText"></span><span data-label>自动换行</span></button>
-          <button class="tool-button" id="markdownPreviewButton" aria-label="Markdown 分屏预览" title="Markdown 分屏预览" aria-pressed="false"><span class="icon-slot" data-icon="FileText"></span><span data-label>Markdown 分屏预览</span></button>
+          <div class="markdown-mode-control hidden" id="markdownModeControl" role="group" aria-label="Markdown 编辑模式">
+            <button class="tool-button markdown-mode-button" id="markdownWysiwygButton" data-markdown-mode="wysiwyg" aria-label="Markdown 即时编辑" title="即时编辑"><span class="icon-slot" data-icon="NotebookPen"></span></button>
+            <button class="tool-button markdown-mode-button" id="markdownSplitButton" data-markdown-mode="split" aria-label="Markdown 分屏预览" title="分屏预览"><span class="icon-slot" data-icon="Columns2"></span></button>
+            <button class="tool-button markdown-mode-button" id="markdownSourceButton" data-markdown-mode="source" aria-label="Markdown 源码" title="源码"><span class="icon-slot" data-icon="FileCode2"></span></button>
+          </div>
         </div>
         <header class="right-tool-tabs" id="rightToolTabs" aria-label="右侧工具">
           <button class="right-tool-tab active" id="rightSearchToolButton" data-right-tool="search"><span class="icon-slot" data-icon="Search"></span><span>文件查找</span></button>
@@ -170,7 +175,9 @@
       <section class="popover app-menu hidden" id="viewMenu" role="menu" aria-label="视图菜单">
         <div class="menu-list">
           <button class="menu-row" id="menuWordWrapButton" role="menuitem"><span class="icon-slot" data-icon="WrapText"></span><strong>自动换行</strong><small></small></button>
-          <button class="menu-row" id="menuMarkdownButton" role="menuitem"><span class="icon-slot" data-icon="FileText"></span><strong>Markdown 分屏预览</strong><small></small></button>
+          <button class="menu-row" id="menuMarkdownWysiwygButton" role="menuitemradio"><span class="icon-slot" data-icon="NotebookPen"></span><strong>Markdown 即时编辑</strong><small></small></button>
+          <button class="menu-row" id="menuMarkdownSplitButton" role="menuitemradio"><span class="icon-slot" data-icon="Columns2"></span><strong>Markdown 分屏预览</strong><small></small></button>
+          <button class="menu-row" id="menuMarkdownSourceButton" role="menuitemradio"><span class="icon-slot" data-icon="FileCode2"></span><strong>Markdown 源码</strong><small></small></button>
           <button class="menu-row" id="menuOutlineButton" role="menuitem"><span class="icon-slot" data-icon="ListTree"></span><strong>Markdown 大纲</strong><small>Ctrl+Shift+O</small></button>
           <div class="menu-divider"></div>
           <button class="menu-row" id="menuThemeButton" role="menuitem"><span class="icon-slot" data-icon="Moon"></span><strong>切换主题</strong><small></small></button>
@@ -227,6 +234,7 @@
               </div>
             </div>
             <div id="editor"></div>
+            <div id="markdownWysiwyg" class="markdown-wysiwyg hidden" aria-label="Markdown 即时编辑器"></div>
           </div>
           <aside class="markdown-preview hidden" id="markdownPreview"></aside>
         </section>
@@ -481,6 +489,19 @@
                   <button data-value="all">全部</button>
                 </div>
               </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Columns2"></span>
+                <div>
+                  <strong>Markdown 页面宽度</strong>
+                  <span>即时编辑和预览使用相同的内容宽度</span>
+                </div>
+                <div class="seg-control wide markdown-width-control" id="settingsMarkdownWidthControl">
+                  <button data-value="typora">Typora</button>
+                  <button data-value="compact">紧凑</button>
+                  <button data-value="wide">宽屏</button>
+                  <button data-value="full">全宽</button>
+                </div>
+              </div>
             </div>
           </section>
 
@@ -504,12 +525,13 @@
               <div class="settings-row">
                 <span class="settings-row-icon icon-slot" data-icon="FileText"></span>
                 <div>
-                  <strong>Markdown 分屏预览</strong>
-                  <span>Markdown 和 MDX 文档自动显示右侧预览</span>
+                  <strong>Markdown 编辑模式</strong>
+                  <span>Markdown 文档默认即时编辑，也可切换分屏或源码</span>
                 </div>
-                <div class="seg-control" id="settingsMarkdownControl">
-                  <button data-value="off">关闭</button>
-                  <button data-value="on">开启</button>
+                <div class="seg-control wide markdown-settings-control" id="settingsMarkdownControl">
+                  <button data-value="wysiwyg">即时编辑</button>
+                  <button data-value="split">分屏</button>
+                  <button data-value="source">源码</button>
                 </div>
               </div>
               <div class="settings-row">
@@ -549,7 +571,7 @@
               <div class="about-mark">N</div>
               <div>
                 <strong>Notra</strong>
-                <span>Tauri + Monaco editor</span>
+                <span>Tauri + Monaco + Muya editor</span>
               </div>
             </div>
             <div class="settings-list">
@@ -565,6 +587,13 @@
                 <div>
                   <strong>语法高亮</strong>
                   <span>Monaco basic languages</span>
+                </div>
+              </div>
+              <div class="settings-row static">
+                <span class="settings-row-icon icon-slot" data-icon="NotebookPen"></span>
+                <div>
+                  <strong>Markdown 内核</strong>
+                  <span>MarkText v0.20.0-rc.1 · Muya 0.2.0 源码</span>
                 </div>
               </div>
             </div>
@@ -599,6 +628,75 @@
           <button class="menu-row" id="treeCopyPathButton" role="menuitem"><span class="icon-slot" data-icon="Copy"></span><strong>复制路径</strong><small></small></button>
           <button class="menu-row" id="treeRevealButton" role="menuitem"><span class="icon-slot" data-icon="ExternalLink"></span><strong>在资源管理器中显示</strong><small></small></button>
           <button class="menu-row" id="treeRefreshButton" role="menuitem"><span class="icon-slot" data-icon="RefreshCw"></span><strong>刷新目录</strong><small></small></button>
+        </div>
+      </section>
+
+      <section class="popover markdown-context-menu hidden" id="markdownContextMenu" role="menu" aria-label="Markdown 编辑菜单">
+        <div class="markdown-context-action-grid" role="group" aria-label="剪贴板操作">
+          <button class="markdown-context-control" type="button" data-markdown-action="cut" data-needs-selection data-needs-edit aria-label="剪切" title="剪切 Ctrl+X"><span class="icon-slot" data-icon="Scissors"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="copy" data-needs-selection aria-label="复制" title="复制 Ctrl+C"><span class="icon-slot" data-icon="Copy"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="paste" data-needs-edit aria-label="粘贴" title="粘贴 Ctrl+V"><span class="icon-slot" data-icon="ClipboardPaste"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="delete" data-needs-selection data-needs-edit aria-label="删除所选内容" title="删除所选内容"><span class="icon-slot" data-icon="Trash2"></span></button>
+        </div>
+
+        <div class="markdown-context-submenu-host">
+          <button class="menu-row markdown-context-parent" id="markdownCopyPasteMenuButton" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-markdown-submenu="markdownCopyPasteMenu">
+            <span class="icon-slot" data-icon="ClipboardCopy"></span><strong>复制 / 粘贴为</strong><small class="icon-slot submenu-chevron" data-icon="ChevronRight"></small>
+          </button>
+          <div class="markdown-context-submenu hidden" id="markdownCopyPasteMenu" role="menu" aria-label="复制和粘贴格式">
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="copy-markdown" data-needs-selection><span class="icon-slot" data-icon="FileText"></span><strong>复制为 Markdown</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="copy-html" data-needs-selection><span class="icon-slot" data-icon="Code2"></span><strong>复制为 HTML</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="copy-rich" data-needs-selection><span class="icon-slot" data-icon="ClipboardCopy"></span><strong>复制为富文本</strong><small></small></button>
+            <div class="menu-divider"></div>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paste-plain" data-needs-edit><span class="icon-slot" data-icon="ClipboardPaste"></span><strong>粘贴为纯文本</strong><small>Ctrl+Shift+V</small></button>
+          </div>
+        </div>
+
+        <div class="menu-divider"></div>
+        <div class="markdown-context-action-grid markdown-format-grid" role="group" aria-label="Markdown 格式">
+          <button class="markdown-context-control" type="button" data-markdown-action="format:strong" data-needs-edit aria-label="粗体" title="粗体 Ctrl+B"><span class="icon-slot" data-icon="Bold"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="format:em" data-needs-edit aria-label="斜体" title="斜体 Ctrl+I"><span class="icon-slot" data-icon="Italic"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="format:inline_code" data-needs-edit aria-label="行内代码" title="行内代码 Ctrl+`"><span class="icon-slot" data-icon="Code2"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="format:link" data-needs-edit aria-label="链接" title="链接 Ctrl+L"><span class="icon-slot" data-icon="Link2"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="paragraph:blockquote" data-needs-edit aria-label="引用" title="引用"><span class="icon-slot" data-icon="Quote"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="paragraph:ol-order" data-needs-edit aria-label="有序列表" title="有序列表"><span class="icon-slot" data-icon="ListOrdered"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="paragraph:ul-bullet" data-needs-edit aria-label="无序列表" title="无序列表"><span class="icon-slot" data-icon="List"></span></button>
+          <button class="markdown-context-control" type="button" data-markdown-action="paragraph:ul-task" data-needs-edit aria-label="任务列表" title="任务列表"><span class="icon-slot" data-icon="ListChecks"></span></button>
+        </div>
+
+        <div class="menu-divider"></div>
+        <div class="markdown-context-submenu-host">
+          <button class="menu-row markdown-context-parent" id="markdownParagraphMenuButton" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-markdown-submenu="markdownParagraphMenu" data-needs-edit>
+            <span class="icon-slot" data-icon="Pilcrow"></span><strong>段落</strong><small class="icon-slot submenu-chevron" data-icon="ChevronRight"></small>
+          </button>
+          <div class="markdown-context-submenu markdown-paragraph-submenu hidden" id="markdownParagraphMenu" role="menu" aria-label="段落格式">
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:heading 1" data-needs-edit><span class="icon-slot" data-icon="Heading1"></span><strong>一级标题</strong><small>Ctrl+1</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:heading 2" data-needs-edit><span class="icon-slot" data-icon="Heading2"></span><strong>二级标题</strong><small>Ctrl+2</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:heading 3" data-needs-edit><span class="icon-slot" data-icon="Heading3"></span><strong>三级标题</strong><small>Ctrl+3</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:heading 4" data-needs-edit><span class="icon-slot" data-icon="Heading4"></span><strong>四级标题</strong><small>Ctrl+4</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:heading 5" data-needs-edit><span class="icon-slot" data-icon="Heading5"></span><strong>五级标题</strong><small>Ctrl+5</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:heading 6" data-needs-edit><span class="icon-slot" data-icon="Heading6"></span><strong>六级标题</strong><small>Ctrl+6</small></button>
+            <div class="menu-divider"></div>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:paragraph" data-needs-edit><span class="icon-slot" data-icon="Pilcrow"></span><strong>正文</strong><small>Ctrl+0</small></button>
+          </div>
+        </div>
+
+        <div class="markdown-context-submenu-host">
+          <button class="menu-row markdown-context-parent" id="markdownInsertMenuButton" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-markdown-submenu="markdownInsertMenu" data-needs-edit>
+            <span class="icon-slot" data-icon="FilePlus2"></span><strong>插入</strong><small class="icon-slot submenu-chevron" data-icon="ChevronRight"></small>
+          </button>
+          <div class="markdown-context-submenu markdown-insert-submenu hidden" id="markdownInsertMenu" role="menu" aria-label="插入 Markdown 内容">
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="insert:image" data-needs-edit><span class="icon-slot" data-icon="Image"></span><strong>图片</strong><small>Ctrl+Shift+I</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:hr" data-needs-edit><span class="icon-slot" data-icon="SeparatorHorizontal"></span><strong>水平分割线</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="insert:table" data-needs-edit><span class="icon-slot" data-icon="Table2"></span><strong>表格</strong><small>Ctrl+Shift+T</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:pre" data-needs-edit><span class="icon-slot" data-icon="FileCode2"></span><strong>代码块</strong><small>Ctrl+Shift+K</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:mathblock" data-needs-edit><span class="icon-slot" data-icon="Sigma"></span><strong>公式块</strong><small>Ctrl+Shift+M</small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:html" data-needs-edit><span class="icon-slot" data-icon="Code2"></span><strong>HTML 块</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="paragraph:front-matter" data-needs-edit><span class="icon-slot" data-icon="Braces"></span><strong>YAML Front Matter</strong><small></small></button>
+            <div class="menu-divider"></div>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="insert:before" data-needs-edit><span class="icon-slot" data-icon="BetweenVerticalStart"></span><strong>在上方插入段落</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="insert:after" data-needs-edit><span class="icon-slot" data-icon="BetweenVerticalEnd"></span><strong>在下方插入段落</strong><small></small></button>
+          </div>
         </div>
       </section>
 
@@ -668,7 +766,7 @@
         </div>
         <div class="right-tool-pane hidden" id="outlineToolPane">
           <header class="outline-head"><strong>Markdown 大纲</strong><span id="outlineSummary"></span></header>
-          <nav class="outline-list" id="outlineList" aria-label="Markdown 大纲"></nav>
+          <nav class="outline-list" id="outlineList" role="tree" aria-label="Markdown 大纲"></nav>
         </div>
       </section>
 

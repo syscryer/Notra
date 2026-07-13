@@ -1,0 +1,805 @@
+import {
+  CodeBlockLanguageSelector,
+  EmojiSelector,
+  FootnoteTool,
+  ImageEditTool,
+  ImagePathPicker,
+  ImageResizeBar,
+  ImageToolBar,
+  InlineFormatToolbar,
+  LinkTools,
+  Muya,
+  ParagraphFrontButton,
+  ParagraphFrontMenu,
+  ParagraphQuickInsertMenu,
+  PreviewToolBar,
+  renderToStaticHTML,
+  TableChessboard,
+  TableColumnToolbar,
+  TableDragBar,
+  TableRowColumMenu,
+  zhCN,
+} from "@muyajs/core";
+import { Link2, createElement as createLucideElement } from "lucide";
+
+export const MARKDOWN_ENGINE_VERSION = "MarkText v0.20.0-rc.1 / @muyajs/core 0.2.0";
+
+export type MarkdownSearchOptions = {
+  matchCase: boolean;
+  wholeWord: boolean;
+  regex: boolean;
+  selectionOnly?: boolean;
+  highlightIndex?: number;
+};
+
+export type MarkdownSearchState = {
+  total: number;
+  index: number;
+};
+
+export type MarkdownOutlineItem = {
+  level: number;
+  text: string;
+};
+
+export type MarkdownPreviewOptions = {
+  darkMode: boolean;
+};
+
+let markdownDiagramId = 0;
+let mermaidRenderQueue = Promise.resolve();
+
+function normalizeMarkdownForEngine(markdown: string) {
+  return markdown.replace(/\r\n?/g, "\n");
+}
+
+type MarkdownEditorOptions = {
+  element: HTMLElement;
+  markdown: string;
+  darkMode: boolean;
+  fontSize: number;
+  fontFamily: string;
+  readOnly: boolean;
+  pickImagePath: () => Promise<string>;
+  openLink: (href: string) => void;
+  onHeadingAnchorCopied: (anchor: string) => void;
+  onChange: (markdown: string) => void;
+};
+
+type MarkdownEngineMatch = {
+  start: number;
+  end: number;
+  match: string;
+  subMatches: string[];
+};
+
+type MarkdownPlugin = Parameters<typeof Muya.use>[0];
+type MarkdownContentBlock = ReturnType<Muya["search"]>["matches"][number]["block"];
+
+type MarkdownSelectionRange = {
+  anchorBlock: MarkdownContentBlock;
+  anchorOffset: number;
+  focusBlock: MarkdownContentBlock;
+  focusOffset: number;
+};
+
+function registerPlugin(plugin: unknown, options: Record<string, unknown> = {}) {
+  const registered = Muya.plugins.some((item) => item.plugin === plugin);
+  if (!registered) Muya.use(plugin as MarkdownPlugin, options);
+}
+
+function registerPlugins(options: Pick<MarkdownEditorOptions, "pickImagePath" | "openLink">) {
+  registerPlugin(EmojiSelector);
+  registerPlugin(FootnoteTool);
+  registerPlugin(InlineFormatToolbar);
+  registerPlugin(ImagePathPicker);
+  registerPlugin(ImageEditTool, { imagePathPicker: options.pickImagePath });
+  registerPlugin(ImageToolBar);
+  registerPlugin(ImageResizeBar);
+  registerPlugin(CodeBlockLanguageSelector);
+  registerPlugin(LinkTools, {
+    jumpClick: (linkInfo: { href?: string | null } | null) => {
+      if (linkInfo?.href) options.openLink(linkInfo.href);
+    },
+  });
+  registerPlugin(ParagraphFrontButton);
+  registerPlugin(ParagraphFrontMenu);
+  registerPlugin(ParagraphQuickInsertMenu);
+  registerPlugin(TableChessboard);
+  registerPlugin(TableColumnToolbar);
+  registerPlugin(TableDragBar);
+  registerPlugin(TableRowColumMenu);
+  registerPlugin(PreviewToolBar);
+}
+
+export function renderMarkdownPreviewHtml(markdown: string, options: MarkdownPreviewOptions) {
+  const body = renderToStaticHTML(normalizeMarkdownForEngine(markdown), {
+    footnote: true,
+    math: true,
+    superSubScript: true,
+    frontMatter: true,
+    isGitlabCompatibilityEnabled: true,
+  });
+  return `<article class="markdown-body" data-theme="${options.darkMode ? "dark" : "light"}">${body}</article>`;
+}
+
+export async function renderMarkdownPreviewDiagrams(root: HTMLElement, options: MarkdownPreviewOptions) {
+  assignHeadingIds(root);
+  const diagrams = [...root.querySelectorAll<HTMLElement>(
+    [
+      "pre > code.language-mermaid",
+      "pre > code.language-vega-lite",
+      "pre > code.language-plantuml",
+      "pre > code.language-flowchart",
+      "pre > code.language-sequence",
+    ].join(", "),
+  )];
+  await Promise.all(diagrams.map((code) => renderDiagram(code, options)));
+}
+
+function assignHeadingIds(root: HTMLElement) {
+  const used = new Set<string>();
+  root.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6").forEach((heading) => {
+    const base = githubHeadingSlug(heading.textContent ?? "") || "heading";
+    let id = base;
+    let suffix = 1;
+    while (used.has(id)) id = `${base}-${suffix++}`;
+    used.add(id);
+    heading.id = id;
+  });
+}
+
+function githubHeadingSlug(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s_-]/gu, "")
+    .replace(/\s+/g, "-");
+}
+
+async function renderDiagram(code: HTMLElement, options: MarkdownPreviewOptions) {
+  const source = code.textContent ?? "";
+  const pre = code.closest("pre");
+  if (!pre || !source.trim()) return;
+  try {
+    if (code.classList.contains("language-mermaid")) {
+      await renderMermaidDiagram(pre, source, options.darkMode);
+    } else if (code.classList.contains("language-vega-lite")) {
+      await renderVegaDiagram(pre, source, options.darkMode);
+    } else if (code.classList.contains("language-plantuml")) {
+      await renderPlantUmlDiagram(pre, source);
+    } else {
+      await renderLegacyDiagram(
+        pre,
+        source,
+        code.classList.contains("language-flowchart") ? "flowchart" : "sequence",
+      );
+    }
+  } catch (error) {
+    pre.classList.add("markdown-diagram-error");
+    pre.dataset.diagramError = error instanceof Error ? error.message : String(error);
+  }
+}
+
+async function renderMermaidDiagram(pre: HTMLPreElement, source: string, darkMode: boolean) {
+  const task = mermaidRenderQueue.then(async () => {
+    const { default: mermaid } = await import("mermaid");
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: darkMode ? "dark" : "default",
+    });
+    const id = `notra-mermaid-${++markdownDiagramId}`;
+    const { svg, bindFunctions } = await mermaid.render(id, source);
+    const container = diagramContainer("mermaid");
+    container.innerHTML = svg;
+    pre.replaceWith(container);
+    const renderedSvg = container.querySelector<SVGSVGElement>("svg");
+    if (renderedSvg) compactDisconnectedMermaidRoots(renderedSvg, source);
+    finalizePreviewDiagramSvg(container, true);
+    bindFunctions?.(container);
+  });
+  mermaidRenderQueue = task.catch(() => undefined);
+  await task;
+}
+
+async function renderVegaDiagram(pre: HTMLPreElement, source: string, darkMode: boolean) {
+  const { default: embed } = await import("vega-embed");
+  const container = diagramContainer("vega-lite");
+  await embed(container, JSON.parse(source) as Record<string, unknown>, {
+    actions: false,
+    renderer: "svg",
+    theme: darkMode ? "dark" : "latimes",
+    ast: true,
+  });
+  pre.replaceWith(container);
+  finalizePreviewDiagramSvg(container);
+}
+
+async function renderPlantUmlDiagram(pre: HTMLPreElement, source: string) {
+  const { encode } = await import("plantuml-encoder");
+  const container = diagramContainer("plantuml");
+  const image = document.createElement("img");
+  image.alt = "PlantUML 图表";
+  image.loading = "lazy";
+  image.referrerPolicy = "no-referrer";
+  image.src = `https://www.plantuml.com/plantuml/svg/${encode(source)}`;
+  container.appendChild(image);
+  pre.replaceWith(container);
+}
+
+async function renderLegacyDiagram(
+  pre: HTMLPreElement,
+  source: string,
+  type: "flowchart" | "sequence",
+) {
+  const { default: loadRenderer } = await import(
+    "../vendor/marktext-muya/src/utils/diagram"
+  );
+  const renderer = await loadRenderer(type);
+  const diagram = renderer.parse(source);
+  const container = diagramContainer(type);
+  pre.replaceWith(container);
+  try {
+    diagram.drawSVG(container, type === "sequence" ? { theme: "hand" } : {});
+    ensureDiagramViewBox(container);
+  } catch (error) {
+    container.replaceWith(pre);
+    throw error;
+  }
+}
+
+function ensureDiagramViewBox(container: HTMLElement) {
+  if (finalizePreviewDiagramSvg(container)) return;
+  const observer = new MutationObserver(() => {
+    if (finalizePreviewDiagramSvg(container)) observer.disconnect();
+  });
+  observer.observe(container, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["width", "height"],
+  });
+  window.setTimeout(() => observer.disconnect(), 5000);
+}
+
+function finalizePreviewDiagramSvg(container: HTMLElement, tightenViewBox = false) {
+  const svg = container.querySelector("svg");
+  if (!svg) return false;
+  const viewBox = svg.viewBox.baseVal;
+  let width = viewBox.width || Number.parseFloat(svg.getAttribute("width") ?? "");
+  let height = viewBox.height || Number.parseFloat(svg.getAttribute("height") ?? "");
+  if (tightenViewBox) {
+    const graph = svg.querySelector<SVGGElement>(":scope > g");
+    const bounds = graph && typeof graph.getBBox === "function" ? graph.getBBox() : null;
+    if (bounds && bounds.width > 0 && bounds.height > 0) {
+      const padding = 16;
+      width = bounds.width + padding * 2;
+      height = bounds.height + padding * 2;
+      svg.setAttribute("viewBox", `${bounds.x - padding} ${bounds.y - padding} ${width} ${height}`);
+      svg.style.maxWidth = `${Math.ceil(width)}px`;
+    }
+  }
+  if (width <= 0 || height <= 0) return false;
+  if (!svg.hasAttribute("viewBox")) svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.classList.remove("markdown-diagram-wide", "markdown-diagram-balanced", "markdown-diagram-portrait");
+  const ratio = width / height;
+  svg.classList.add(
+    ratio >= 1.2
+      ? "markdown-diagram-wide"
+      : ratio >= 0.75
+        ? "markdown-diagram-balanced"
+        : "markdown-diagram-portrait",
+  );
+  return true;
+}
+
+function compactDisconnectedMermaidRoots(svg: SVGSVGElement, source: string) {
+  const direction = source.match(/^\s*(?:flowchart|graph)\s+(TD|TB|BT|LR|RL)\b/im)?.[1];
+  const graphRoot = svg.querySelector<SVGGElement>("g.root");
+  const nodes = graphRoot?.querySelector<SVGGElement>(":scope > g.nodes");
+  if (!direction || !nodes) return;
+
+  const roots = Array.from(nodes.children).filter(
+    (child): child is SVGGElement => child instanceof SVGGElement && child.classList.contains("root"),
+  );
+  if (roots.length < 2) return;
+
+  const subgraphIds = Array.from(
+    source.matchAll(/^\s*subgraph\s+([A-Za-z0-9_-]+)/gim),
+    (match) => match[1],
+  );
+  const sourceIndex = (root: SVGGElement) => {
+    const clusterId = root.querySelector<SVGGElement>("g.cluster[id]")?.id ?? "";
+    const index = subgraphIds.findIndex((id) => clusterId.endsWith(`-${id}`));
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  roots.sort((left, right) => sourceIndex(left) - sourceIndex(right));
+
+  const boxes = roots.map((root) => root.getBBox());
+  const gap = 48;
+  const vertical = direction === "TD" || direction === "TB" || direction === "BT";
+  const expectedWidth = vertical
+    ? Math.max(...boxes.map((box) => box.width))
+    : boxes.reduce((total, box) => total + box.width, 0) + gap * (boxes.length - 1);
+  const expectedHeight = vertical
+    ? boxes.reduce((total, box) => total + box.height, 0) + gap * (boxes.length - 1)
+    : Math.max(...boxes.map((box) => box.height));
+  const currentBounds = nodes.getBBox();
+  if (currentBounds.width <= expectedWidth * 2.5 && currentBounds.height <= expectedHeight * 2.5) return;
+
+  const inset = 8;
+  let offset = inset;
+  roots.forEach((root, index) => {
+    const box = boxes[index];
+    const x = vertical ? inset + (expectedWidth - box.width) / 2 : offset;
+    const y = vertical ? offset : inset + (expectedHeight - box.height) / 2;
+    root.setAttribute("transform", `translate(${x - box.x}, ${y - box.y})`);
+    offset += (vertical ? box.height : box.width) + gap;
+  });
+}
+
+function diagramContainer(type: string) {
+  const container = document.createElement("div");
+  container.className = `markdown-diagram ${type}`;
+  return container;
+}
+
+export class MarkdownEditorBridge {
+  private readonly muya: Muya;
+  private readonly changeListener: () => void;
+  private readonly headingCopyLinkObserver: MutationObserver;
+  private readonly headingCopyListener: (payload: { key?: string }) => void;
+  private readonly onChange: (markdown: string) => void;
+  private readonly onHeadingAnchorCopied: (anchor: string) => void;
+  private markdown: string;
+  private applyingMarkdown = false;
+  private changeRevision = 0;
+  private synchronizedRevision = 0;
+  private lastSearch: { value: string; options: MarkdownSearchOptions } | null = null;
+  private searchSelection: MarkdownSelectionRange | null = null;
+
+  constructor(options: MarkdownEditorOptions) {
+    registerPlugins(options);
+    this.onChange = options.onChange;
+    this.onHeadingAnchorCopied = options.onHeadingAnchorCopied;
+    const initialMarkdown = normalizeMarkdownForEngine(options.markdown);
+    this.markdown = initialMarkdown;
+    this.muya = new Muya(options.element, {
+      markdown: initialMarkdown,
+      locale: zhCN,
+      frontMatter: true,
+      footnote: true,
+      math: true,
+      superSubScript: true,
+      isGitlabCompatibilityEnabled: true,
+      codeBlockLineNumbers: true,
+      autoPairBracket: true,
+      autoPairMarkdownSyntax: true,
+      autoPairQuote: true,
+      preferLooseListItem: true,
+      hideQuickInsertHint: false,
+      hideLinkPopup: false,
+      disableHtml: false,
+      autoCheck: true,
+      spellcheckEnabled: true,
+      autoMoveCheckedToEnd: false,
+      trimUnnecessaryCodeBlockEmptyLines: false,
+      bulletListMarker: "-",
+      orderListDelimiter: ".",
+      frontmatterType: "-",
+      mermaidTheme: options.darkMode ? "dark" : "default",
+      vegaTheme: options.darkMode ? "dark" : "latimes",
+      fontSize: options.fontSize,
+      editorFontFamily: options.fontFamily,
+      lineHeight: 1.7,
+      tabSize: 4,
+      listIndentation: 1,
+      wrapCodeBlocks: true,
+    });
+    this.changeListener = () => {
+      const markdown = normalizeMarkdownForEngine(this.muya.getMarkdown());
+      this.markdown = markdown;
+      if (this.applyingMarkdown) return;
+      this.changeRevision += 1;
+      this.onChange(markdown);
+    };
+    this.headingCopyListener = ({ key }) => {
+      if (key) {
+        void this.copyHeadingAnchor(key).catch((error) => {
+          console.error("复制标题锚点失败", error);
+        });
+      }
+    };
+    this.muya.on("json-change", this.changeListener);
+    this.muya.on("heading-copy-link", this.headingCopyListener);
+    this.muya.locale(zhCN);
+    this.applyingMarkdown = true;
+    try {
+      this.muya.init();
+    } finally {
+      this.applyingMarkdown = false;
+      this.synchronizedRevision = this.changeRevision;
+    }
+    this.decorateHeadingCopyLinks(this.root);
+    this.headingCopyLinkObserver = new MutationObserver((records) => {
+      records.forEach((record) => {
+        record.addedNodes.forEach((node) => this.decorateHeadingCopyLinks(node));
+      });
+    });
+    this.headingCopyLinkObserver.observe(this.root, { childList: true, subtree: true });
+    this.updateAppearance(options.darkMode, options.fontSize, options.fontFamily);
+    this.setReadOnly(options.readOnly);
+  }
+
+  get root() {
+    return this.muya.domNode;
+  }
+
+  getMarkdown() {
+    this.muya.flush();
+    const markdown = normalizeMarkdownForEngine(this.muya.getMarkdown());
+    this.markdown = markdown;
+    return markdown;
+  }
+
+  hasUnsynchronizedChanges() {
+    return this.changeRevision !== this.synchronizedRevision;
+  }
+
+  markSynchronized(markdown: string) {
+    if (normalizeMarkdownForEngine(markdown) === this.markdown) {
+      this.synchronizedRevision = this.changeRevision;
+    }
+  }
+
+  getOutline(): MarkdownOutlineItem[] {
+    this.muya.flush();
+    return this.muya.getTOC().map((item) => ({
+      level: item.lvl,
+      text: item.content,
+    }));
+  }
+
+  setMarkdown(markdown: string, focus = false, preserveHistory = false) {
+    const normalizedMarkdown = normalizeMarkdownForEngine(markdown);
+    if (normalizedMarkdown === this.markdown) {
+      if (focus) this.focus();
+      return;
+    }
+    this.markdown = normalizedMarkdown;
+    this.applyingMarkdown = true;
+    try {
+      if (preserveHistory) {
+        this.muya.replaceContent(normalizedMarkdown);
+        if (focus) this.focus();
+      } else {
+        this.muya.setContent(normalizedMarkdown, focus);
+        this.muya.clearHistory();
+      }
+    } finally {
+      this.applyingMarkdown = false;
+      this.synchronizedRevision = this.changeRevision;
+    }
+  }
+
+  updateAppearance(darkMode: boolean, fontSize: number, fontFamily: string) {
+    this.muya.setOptions({
+      fontSize,
+      editorFontFamily: fontFamily,
+      mermaidTheme: darkMode ? "dark" : "default",
+      vegaTheme: darkMode ? "dark" : "latimes",
+    });
+  }
+
+  setReadOnly(readOnly: boolean) {
+    this.root.contentEditable = readOnly ? "false" : "true";
+    this.root.setAttribute("aria-readonly", String(readOnly));
+  }
+
+  focus() {
+    this.muya.focus();
+  }
+
+  undo() {
+    this.muya.undo();
+  }
+
+  redo() {
+    this.muya.redo();
+  }
+
+  selectAll() {
+    this.muya.selectAll();
+  }
+
+  format(type: string) {
+    this.muya.format(type);
+    this.focus();
+  }
+
+  updateParagraph(type: string) {
+    this.muya.updateParagraph(type);
+    this.focus();
+  }
+
+  insertParagraph(location: "before" | "after") {
+    this.muya.insertParagraph(location);
+    this.focus();
+  }
+
+  createTable(rows = 4, columns = 3) {
+    this.muya.createTable({ rows, columns });
+    this.focus();
+  }
+
+  insertImage(src: string) {
+    this.muya.insertImage({ src });
+    this.focus();
+  }
+
+  copyAsMarkdown() {
+    this.focus();
+    this.muya.copyAsMarkdown();
+  }
+
+  copyAsHtml() {
+    this.focus();
+    this.muya.copyAsHtml();
+  }
+
+  copyAsRich() {
+    this.focus();
+    this.muya.copyAsRich();
+  }
+
+  async pasteAsPlainText() {
+    this.focus();
+    await this.muya.pasteAsPlainText();
+  }
+
+  selectedText() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return "";
+    const range = selection.getRangeAt(0);
+    if (!this.root.contains(range.commonAncestorContainer)) return "";
+    return selection.toString();
+  }
+
+  captureSearchSelection() {
+    const selection = this.muya.editor.selection;
+    const live = selection.getSelection();
+    const anchorBlock = live?.anchor.block ?? selection.anchorBlock;
+    const focusBlock = live?.focus.block ?? selection.focusBlock;
+    const anchorOffset = live?.anchor.offset ?? selection.anchor?.offset;
+    const focusOffset = live?.focus.offset ?? selection.focus?.offset;
+    if (
+      !anchorBlock ||
+      !focusBlock ||
+      anchorOffset === undefined ||
+      focusOffset === undefined ||
+      (anchorBlock === focusBlock && anchorOffset === focusOffset)
+    ) {
+      this.searchSelection = null;
+      return false;
+    }
+    this.searchSelection = { anchorBlock, anchorOffset, focusBlock, focusOffset };
+    return true;
+  }
+
+  searchSelectionSignature() {
+    if (!this.searchSelection) return "empty-selection";
+    const { anchorBlock, anchorOffset, focusBlock, focusOffset } = this.searchSelection;
+    return `${anchorBlock.path.join(".")}:${anchorOffset}-${focusBlock.path.join(".")}:${focusOffset}`;
+  }
+
+  search(value: string, options: MarkdownSearchOptions): MarkdownSearchState {
+    this.lastSearch = { value, options: { ...options } };
+    const searchOptions: Record<string, boolean | number> = {
+      isCaseSensitive: options.matchCase,
+      isWholeWord: options.wholeWord,
+      isRegexp: options.regex,
+    };
+    if (typeof options.highlightIndex === "number") searchOptions.highlightIndex = options.highlightIndex;
+    const result = this.muya.search(value, searchOptions);
+    if (options.selectionOnly) this.filterSearchToSelection(result, options.highlightIndex);
+    return { total: result.matches.length, index: result.index };
+  }
+
+  private filterSearchToSelection(result: ReturnType<Muya["search"]>, highlightIndex?: number) {
+    const updateMatches = (result as unknown as {
+      _updateMatches: (clear?: boolean) => void;
+    })._updateMatches.bind(result);
+    updateMatches(true);
+    const range = this.searchSelection;
+    if (!range) {
+      result.matches = [];
+      result.index = -1;
+      return;
+    }
+
+    const order = new Map<MarkdownContentBlock, number>();
+    let block = this.muya.editor.scrollPage?.firstContentInDescendant() ?? null;
+    while (block) {
+      order.set(block, order.size);
+      block = block.nextContentInContext() ?? null;
+    }
+    const anchorIndex = order.get(range.anchorBlock);
+    const focusIndex = order.get(range.focusBlock);
+    if (anchorIndex === undefined || focusIndex === undefined) {
+      result.matches = [];
+      result.index = -1;
+      return;
+    }
+
+    const forward = anchorIndex < focusIndex || (anchorIndex === focusIndex && range.anchorOffset <= range.focusOffset);
+    const firstBlock = forward ? range.anchorBlock : range.focusBlock;
+    const lastBlock = forward ? range.focusBlock : range.anchorBlock;
+    const firstOffset = forward ? range.anchorOffset : range.focusOffset;
+    const lastOffset = forward ? range.focusOffset : range.anchorOffset;
+    const firstIndex = order.get(firstBlock)!;
+    const lastIndex = order.get(lastBlock)!;
+    result.matches = result.matches.filter((match) => {
+      const index = order.get(match.block);
+      if (index === undefined || index < firstIndex || index > lastIndex) return false;
+      if (firstBlock === lastBlock) return match.start >= firstOffset && match.end <= lastOffset;
+      if (match.block === firstBlock) return match.start >= firstOffset;
+      if (match.block === lastBlock) return match.end <= lastOffset;
+      return true;
+    });
+    const requestedIndex = highlightIndex === undefined || highlightIndex === -1 ? 0 : highlightIndex;
+    result.index = result.matches.length > 0
+      ? Math.min(result.matches.length - 1, Math.max(0, requestedIndex))
+      : -1;
+    updateMatches();
+  }
+
+  find(direction: "previous" | "next"): MarkdownSearchState {
+    const result = this.muya.find(direction);
+    return { total: result.matches.length, index: result.index };
+  }
+
+  replace(replacement: string, replaceAll: boolean, regex: boolean): MarkdownSearchState {
+    if (regex && this.lastSearch) return this.replaceRegex(replacement, replaceAll);
+    const result = this.muya.replace(replacement, { isSingle: !replaceAll, isRegexp: regex });
+    return { total: result.matches.length, index: result.index };
+  }
+
+  private replaceRegex(replacement: string, replaceAll: boolean): MarkdownSearchState {
+    const search = this.muya.editor.searchModule;
+    const active = search.matches[search.index];
+    const targets = replaceAll ? [...search.matches] : active ? [active] : [];
+    if (targets.length === 0 || !this.lastSearch) {
+      return { total: search.matches.length, index: search.index };
+    }
+
+    const matchesByBlock = new Map<(typeof targets)[number]["block"], typeof targets>();
+    for (const match of targets) {
+      const matches = matchesByBlock.get(match.block) ?? [];
+      matches.push(match);
+      matchesByBlock.set(match.block, matches);
+    }
+
+    for (const [block, matches] of matchesByBlock) {
+      const source = block.text;
+      let cursor = 0;
+      let next = "";
+      for (const match of matches) {
+        next += source.slice(cursor, match.start);
+        next += expandRegexReplacement(replacement, match, source, this.lastSearch);
+        cursor = match.end;
+      }
+      block.text = next + source.slice(cursor);
+    }
+
+    const previousIndex = search.index;
+    const refreshed = this.muya.search(this.lastSearch.value, {
+      isCaseSensitive: this.lastSearch.options.matchCase,
+      isWholeWord: this.lastSearch.options.wholeWord,
+      isRegexp: true,
+      highlightIndex: replaceAll ? -1 : Math.max(0, Math.min(previousIndex, search.matches.length - 1)),
+    });
+    return { total: refreshed.matches.length, index: refreshed.index };
+  }
+
+  clearSearch(preserveSelection = false) {
+    this.muya.search("", { selectHighlight: true });
+    this.lastSearch = null;
+    if (!preserveSelection) this.searchSelection = null;
+  }
+
+  hideFloatTools() {
+    this.muya.hideAllFloatTools();
+  }
+
+  revealHeading(index: number) {
+    const heading = this.root.querySelectorAll<HTMLElement>("h1, h2, h3, h4, h5, h6")[index];
+    heading?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  private decorateHeadingCopyLinks(node: Node) {
+    const links: HTMLElement[] = [];
+    if (node instanceof HTMLElement && node.matches(".mu-copy-header-link")) links.push(node);
+    if (node instanceof Element || node instanceof DocumentFragment) {
+      links.push(...node.querySelectorAll<HTMLElement>(".mu-copy-header-link"));
+    }
+    links.forEach((link) => {
+      if (link.dataset.notraIcon === "link-2") return;
+      const icon = createLucideElement(Link2, {
+        class: "mu-icon-inner markdown-heading-link-icon",
+        "aria-hidden": "true",
+        focusable: "false",
+        width: "14",
+        height: "14",
+        "stroke-width": "1.9",
+      });
+      link.dataset.notraIcon = "link-2";
+      link.replaceChildren(icon);
+    });
+  }
+
+  private async copyHeadingAnchor(key: string) {
+    const heading = this.muya.getTOC().find((item) => item.slug === key);
+    if (!heading) return;
+    const anchor = `#${heading.githubSlug}`;
+    await navigator.clipboard.writeText(anchor);
+    this.onHeadingAnchorCopied(anchor);
+  }
+
+  destroy() {
+    this.headingCopyLinkObserver.disconnect();
+    this.muya.off("json-change", this.changeListener);
+    this.muya.off("heading-copy-link", this.headingCopyListener);
+    this.muya.destroy();
+  }
+}
+
+function expandRegexReplacement(
+  replacement: string,
+  match: MarkdownEngineMatch,
+  source: string,
+  search: { value: string; options: MarkdownSearchOptions },
+) {
+  const namedGroups = replacement.includes("$<")
+    ? regexNamedGroupsAt(source, search.value, search.options, match.start)
+    : undefined;
+  return replacement.replace(/\$(\$|&|0|`|'|<([^>]+)>|(\d{1,2}))/g, (token, marker: string, name?: string, digits?: string) => {
+    if (marker === "$") return "$";
+    if (marker === "&" || marker === "0") return match.match;
+    if (marker === "`") return source.slice(0, match.start);
+    if (marker === "'") return source.slice(match.end);
+    if (marker.startsWith("<")) {
+      return namedGroups && name && Object.prototype.hasOwnProperty.call(namedGroups, name)
+        ? namedGroups[name] ?? ""
+        : token;
+    }
+    if (!digits) return token;
+    const index = Number(digits);
+    if (index > 0 && index <= match.subMatches.length) return match.subMatches[index - 1] ?? "";
+    if (digits.length === 2) {
+      const first = Number(digits[0]);
+      if (first > 0 && first <= match.subMatches.length) return `${match.subMatches[first - 1] ?? ""}${digits[1]}`;
+    }
+    return token;
+  });
+}
+
+function regexNamedGroupsAt(
+  source: string,
+  pattern: string,
+  options: MarkdownSearchOptions,
+  expectedIndex: number,
+) {
+  try {
+    const expression = new RegExp(options.wholeWord ? `\\b${pattern}\\b` : pattern, options.matchCase ? "g" : "gi");
+    let match: RegExpExecArray | null;
+    while ((match = expression.exec(source))) {
+      if (match.index === expectedIndex) return match.groups;
+      if (match.index > expectedIndex) break;
+      if (match[0] === "") expression.lastIndex += 1;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}

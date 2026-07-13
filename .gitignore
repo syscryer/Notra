@@ -3,6 +3,7 @@ target-codex-run/
 crates/notra-app/gen/
 crates/notra-app/frontend/dist/
 crates/notra-app/frontend/node_modules/
+node_modules/
 .reference/
 .learnings/
 .idea/
