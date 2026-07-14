@@ -1,4 +1,4 @@
-// @vitest-environment happy-dom
+// @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkImageContentType, getImageSrc, loadImage } from '../image';
@@ -132,6 +132,26 @@ describe('loadImage — undetermined content-type still attempts the load (#3837
 });
 
 describe('getImageSrc — relative local image paths anchored to window.DIRNAME', () => {
+    it('uses the embedder resolver before the legacy file URL fallback', () => {
+        const resolveImageSrc = vi.fn((src: string) =>
+            `http://asset.localhost/${encodeURIComponent(src)}`,
+        );
+
+        expect(getImageSrc('assets/foo.png', resolveImageSrc)).toEqual({
+            isUnknownType: false,
+            src: 'http://asset.localhost/assets%2Ffoo.png',
+        });
+        expect(resolveImageSrc).toHaveBeenCalledWith('assets/foo.png');
+    });
+
+    it('keeps the built-in resolver when the embedder declines the source', () => {
+        withDirname(DIRNAME, () => {
+            expect(getImageSrc('assets/foo.png', () => '').src).toBe(
+                'file:///home/user/docs/assets/foo.png',
+            );
+        });
+    });
+
     it('resolves a relative path against the document directory', () => {
         withDirname(DIRNAME, () => {
             expect(getImageSrc('assets/foo.png')).toEqual({

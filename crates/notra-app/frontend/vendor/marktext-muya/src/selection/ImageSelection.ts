@@ -69,7 +69,7 @@ class ImageSelection {
             = this._muya.domNode
                 .querySelector<HTMLImageElement>(`#${imageId} img`)
                 ?.getAttribute('src') ?? '';
-        const src = getImageSrc(tokenSrc).src || imgSrc;
+        const src = getImageSrc(tokenSrc, this._muya.options.resolveImageSrc).src || imgSrc;
 
         if (src) {
             this._muya.eventCenter.emit('preview-image', {
@@ -115,7 +115,9 @@ class ImageSelection {
                 && !imageWrapper.closest(LINK_SELECTOR)
             ) {
                 const tokenSrc = imageInfo.token.src || imageInfo.token.attrs.src || '';
-                const src = getImageSrc(tokenSrc).src || target.getAttribute('src') || '';
+                const src = getImageSrc(tokenSrc, this._muya.options.resolveImageSrc).src
+                    || target.getAttribute('src')
+                    || '';
                 if (src) {
                     eventCenter.emit('format-click', {
                         event,

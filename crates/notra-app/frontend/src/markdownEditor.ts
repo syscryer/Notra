@@ -71,6 +71,7 @@ type MarkdownEditorOptions = {
   fontFamily: string;
   readOnly: boolean;
   pickImagePath: () => Promise<string>;
+  resolveImageSrc: (src: string) => string;
   openLink: (href: string) => void;
   onHeadingAnchorCopied: (anchor: string) => void;
   onChange: (markdown: string) => void;
@@ -415,6 +416,7 @@ export class MarkdownEditorBridge {
       tabSize: 4,
       listIndentation: 1,
       wrapCodeBlocks: true,
+      resolveImageSrc: options.resolveImageSrc,
     });
     this.changeListener = () => {
       const markdown = normalizeMarkdownForEngine(this.muya.getMarkdown());

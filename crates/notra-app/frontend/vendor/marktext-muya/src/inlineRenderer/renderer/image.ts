@@ -80,7 +80,7 @@ export default function image(
     this: Renderer,
     { h, block, token }: ISyntaxRenderOptions & { token: ImageToken },
 ) {
-    const imageSrc = getImageSrc(token.attrs.src);
+    const imageSrc = getImageSrc(token.attrs.src, this.muya.options.resolveImageSrc);
     const selectedImage = this.muya.editor.selection.image;
     const { i18n } = this.muya;
     const data = {

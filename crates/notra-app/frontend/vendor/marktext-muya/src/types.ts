@@ -79,6 +79,13 @@ export interface IMuyaOptions {
      */
     imageAction?: (state: IImageActionState) => Promise<string>;
     /**
+     * Convert an image source into the URL the renderer should load without
+     * changing the source stored in Markdown. Desktop embedders use this to
+     * translate local file paths to their sandbox-safe asset protocol.
+     * Return an empty string to keep Muya's built-in resolution behavior.
+     */
+    resolveImageSrc?: (src: string) => string;
+    /**
      * Resolve a dropped `File` to a local filesystem path.
      *
      * The DnD `DataTransfer` exposes a `File` object but not its on-disk

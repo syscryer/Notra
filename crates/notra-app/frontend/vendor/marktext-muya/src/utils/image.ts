@@ -67,7 +67,7 @@ function resolveRelativePath(base: string, relative: string): string {
     return tail ? `${root}/${tail}` : root;
 }
 
-export function getImageSrc(src: string) {
+export function getImageSrc(src: string, resolveImageSrc?: (src: string) => string) {
     const EXT_REG = /\.(?:jpeg|jpg|png|gif|svg|webp)(?=\?|$)/i;
     // http[s] (domain or IPv4 or localhost or IPv6) [port] /not-white-space
     const URL_REG
@@ -75,6 +75,13 @@ export function getImageSrc(src: string) {
     const DATA_URL_REG
         = /^data:image\/[\w+-]+(?:;[\w-]+=[\w-]+|;base64)*,[a-zA-Z0-9+/]+={0,2}$/;
     const imageExtension = EXT_REG.test(src);
+    const resolvedSrc = resolveImageSrc?.(src);
+    if (resolvedSrc) {
+        return {
+            isUnknownType: !imageExtension,
+            src: resolvedSrc,
+        };
+    }
     // An already-`file://` src must not be re-prefixed (avoids `file://file://`).
     const isFileUrl = /^file:\/\//i.test(src);
     const isUrl = URL_REG.test(src) || (imageExtension && isFileUrl);

@@ -25,7 +25,7 @@ export default function referenceImage(
     if (this.parent.labels.has(rawSrc.toLowerCase()))
         ({ href, title } = this.parent.labels.get(rawSrc.toLowerCase())!);
 
-    const imageSrc = getImageSrc(href);
+    const imageSrc = getImageSrc(href, this.muya.options.resolveImageSrc);
     const { src } = imageSrc;
     let id;
     let isSuccess;

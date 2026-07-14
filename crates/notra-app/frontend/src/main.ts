@@ -4680,6 +4680,7 @@ async function createMarkdownEditor(doc: OpenDocument): Promise<MarkdownEditorCa
       fontFamily: resolveEditorFontStack(),
       readOnly: editorBusyDepth > 0 || doc.readOnly,
       pickImagePath: pickMarkdownImagePath,
+      resolveImageSrc: (source) => resolveMarkdownImageSource(source, doc),
       openLink: openMarkdownLink,
       onHeadingAnchorCopied: (anchor) => log(`已复制标题锚点 ${anchor}`),
       onChange: (markdown) => {
@@ -4874,6 +4875,16 @@ function refreshMarkdownImages() {
   refreshMarkdownResources(markdownEditor.root, activeDocument());
 }
 
+function resolveMarkdownImageSource(source: string, doc: OpenDocument) {
+  const value = source.trim();
+  if (!value || /^(?:https?:|data:|blob:|asset:)/i.test(value)) return "";
+  const suffixIndex = value.search(/[?#]/);
+  const path = suffixIndex >= 0 ? value.slice(0, suffixIndex) : value;
+  const suffix = suffixIndex >= 0 ? value.slice(suffixIndex) : "";
+  const absolute = absoluteMarkdownResourcePath(path, doc);
+  return absolute ? `${convertFileSrc(absolute)}${suffix}` : "";
+}
+
 function refreshMarkdownResources(root: ParentNode, doc: OpenDocument) {
   root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
     const current = image.getAttribute("src") ?? "";
@@ -4882,10 +4893,9 @@ function refreshMarkdownResources(root: ParentNode, doc: OpenDocument) {
     if (/^https?:\/\/asset\.localhost\//i.test(current) && stored) return;
     const source = stored && /^https?:\/\/asset\.localhost\//i.test(current) ? stored : current;
     if (!source || /^(?:https?:|data:|blob:|asset:)/i.test(source)) return;
-    const absolute = absoluteMarkdownResourcePath(source.split(/[?#]/, 1)[0], doc);
-    if (!absolute) return;
+    const converted = resolveMarkdownImageSource(source, doc);
+    if (!converted) return;
     image.dataset.notraSource = source;
-    const converted = convertFileSrc(absolute);
     if (current !== converted) image.setAttribute("src", converted);
   });
 }
@@ -6146,7 +6156,7 @@ function defineThemes() {
       { token: "delimiter.bracket.json", foreground: "3238d8" },
     ],
     colors: {
-      "editor.background": "#fbfcff",
+      "editor.background": "#ffffff",
       "editor.foreground": "#111827",
       "editorGutter.background": "#f5f8fc",
       "editorLineNumber.foreground": "#8b97a8",

@@ -68,7 +68,7 @@ class HTMLPreview extends Parent {
 
             for (const img of imgs) {
                 const src = img.getAttribute('src')!;
-                const imageSrc = getImageSrc(src);
+                const imageSrc = getImageSrc(src, this.muya.options.resolveImageSrc);
                 img.setAttribute('src', imageSrc.src);
             }
 

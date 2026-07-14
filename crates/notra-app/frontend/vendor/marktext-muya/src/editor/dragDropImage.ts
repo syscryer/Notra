@@ -204,7 +204,7 @@ async function persistDroppedImage(
 
     try {
         const newSrc = await imageAction({ src: path, alt: name, title: '' });
-        const { src } = getImageSrc(path);
+        const { src } = getImageSrc(path, muya.options.resolveImageSrc);
         if (src)
             muya.editor.inlineRenderer.renderer.urlMap.set(newSrc, src);
 
