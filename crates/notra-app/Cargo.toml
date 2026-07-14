@@ -18,6 +18,10 @@ regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
+tauri-plugin-single-instance.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg.workspace = true
 
 [build-dependencies]
 tauri-build.workspace = true

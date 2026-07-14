@@ -299,6 +299,10 @@
               <span class="icon-slot" data-icon="FolderTree"></span>
               <strong>工作区</strong>
             </button>
+            <button class="settings-nav-item" data-settings-section="system">
+              <span class="icon-slot" data-icon="MonitorCog"></span>
+              <strong>系统集成</strong>
+            </button>
             <button class="settings-nav-item" data-settings-section="search">
               <span class="icon-slot" data-icon="Search"></span>
               <strong>查找</strong>
@@ -541,6 +545,44 @@
                   <span>打开命令和快速跳转</span>
                 </div>
                 <button class="settings-action" id="settingsCommandButton">打开</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="system">
+            <header class="settings-section-head">
+              <strong>系统集成</strong>
+              <span>由你决定 Notra 如何出现在 Windows 资源管理器中</span>
+            </header>
+            <div class="settings-list">
+              <div class="settings-row shell-integration-row">
+                <span class="settings-row-icon icon-slot" data-icon="MousePointerClick"></span>
+                <div>
+                  <strong>文件右键菜单</strong>
+                  <span id="settingsShellIntegrationDetail">检测“以 Notra 打开”状态</span>
+                </div>
+                <div class="shell-integration-control">
+                  <span class="settings-status-pill" id="settingsShellIntegrationStatus" aria-live="polite">检测中</span>
+                  <button class="settings-action" id="settingsShellIntegrationButton" aria-pressed="false">开启</button>
+                </div>
+              </div>
+              <div class="settings-row shell-integration-row">
+                <span class="settings-row-icon icon-slot" data-icon="ListChecks"></span>
+                <div>
+                  <strong>默认应用候选</strong>
+                  <span id="settingsDefaultAppDetail">检测 Windows 默认应用候选状态</span>
+                </div>
+                <div class="shell-integration-control">
+                  <span class="settings-status-pill" id="settingsDefaultAppStatus" aria-live="polite">检测中</span>
+                  <button class="settings-action" id="settingsDefaultAppButton" aria-pressed="false">开启</button>
+                </div>
+              </div>
+              <div class="settings-row static">
+                <span class="settings-row-icon icon-slot" data-icon="ShieldCheck"></span>
+                <div>
+                  <strong>安装时保持不变</strong>
+                  <span>安装和升级不会自动关联扩展名，也不会修改已有默认应用</span>
+                </div>
               </div>
             </div>
           </section>

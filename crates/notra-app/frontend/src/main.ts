@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowDown,
@@ -55,6 +56,8 @@ import {
   Maximize2,
   Minus,
   Moon,
+  MonitorCog,
+  MousePointerClick,
   NotebookPen,
   PanelLeftClose,
   PanelRightClose,
@@ -72,6 +75,7 @@ import {
   Scissors,
   SeparatorHorizontal,
   Settings,
+  ShieldCheck,
   Sigma,
   Sun,
   Table2,
@@ -140,6 +144,13 @@ interface WorkspaceMutationDto {
 interface StartupArgsDto {
   files: string[];
   directories: string[];
+}
+
+interface ShellIntegrationStatusDto {
+  supported: boolean;
+  enabled: boolean;
+  label: string;
+  detail: string;
 }
 
 interface TextMatchDto {
@@ -216,6 +227,8 @@ interface SessionSnapshot {
   activePath: string | null;
   activeDraftId: string | null;
   darkMode: boolean;
+  contextMenuEnabled?: boolean;
+  defaultAppCandidateEnabled?: boolean;
   rightSidebarOpen: boolean;
   rightTool: RightTool;
   rightSidebarWidth: number;
@@ -338,7 +351,7 @@ type FindView = "find" | "replace" | "workspace-find" | "workspace-replace";
 type RightTool = "search" | "outline";
 type SearchScope = "current" | "open" | "workspace";
 type RenderWhitespaceMode = "none" | "selection" | "all";
-type SettingsSection = "appearance" | "editor" | "workspace" | "search" | "about";
+type SettingsSection = "appearance" | "editor" | "workspace" | "system" | "search" | "about";
 type FontMode = "preset" | "custom";
 type ShellFontPreset = "system" | "segoe" | "yahei" | "dengxian" | "sourceHanSans" | "misans";
 type EditorFontPreset = "cascadia" | "jetbrains" | "consolas" | "firaCode" | "sourceCodePro";
@@ -682,6 +695,24 @@ const state = {
   editorFontPreset: DEFAULT_EDITOR_FONT_PRESET as EditorFontPreset,
   editorFontCustom: EDITOR_FONT_STACKS[DEFAULT_EDITOR_FONT_PRESET],
   settingsSection: "appearance" as SettingsSection,
+  shellIntegration: {
+    supported: false,
+    enabled: false,
+    label: "以 Notra 打开",
+    detail: "正在检测 Windows 右键菜单状态",
+  } as ShellIntegrationStatusDto,
+  contextMenuEnabled: true,
+  shellIntegrationLoaded: false,
+  shellIntegrationBusy: false,
+  defaultAppCandidate: {
+    supported: false,
+    enabled: false,
+    label: "Windows 默认应用候选",
+    detail: "正在检测 Windows 默认应用候选状态",
+  } as ShellIntegrationStatusDto,
+  defaultAppCandidateEnabled: true,
+  defaultAppCandidateLoaded: false,
+  defaultAppCandidateBusy: false,
   rightTool: "search" as RightTool,
   rightSidebarWidth: 420,
   busyMessage: "",
@@ -704,6 +735,8 @@ let tabMenuDocumentId = 0;
 let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
 let editorBusyDepth = 0;
+let openRequestTask: Promise<void> = Promise.resolve();
+let openRequestsReady = false;
 let titlebarMaximizeToggleAt = 0;
 let rightSidebarResizeState: { pointerId: number } | null = null;
 let markdownPreviewTimer = 0;
@@ -808,6 +841,8 @@ const lucideIcons: Record<string, IconNode> = {
   Maximize2,
   Minus,
   Moon,
+  MonitorCog,
+  MousePointerClick,
   NotebookPen,
   PanelLeftClose,
   PanelRightClose,
@@ -825,6 +860,7 @@ const lucideIcons: Record<string, IconNode> = {
   Scissors,
   SeparatorHorizontal,
   Settings,
+  ShieldCheck,
   Sigma,
   Sun,
   Table2,
@@ -959,6 +995,7 @@ function setIconSlot(slot: HTMLElement | null, name: string) {
 bootstrap();
 
 function bootstrap() {
+  bindOpenRequestListener();
   window.addEventListener("unhandledrejection", (event) => {
     log(`操作失败：${event.reason instanceof Error ? event.reason.message : String(event.reason)}`);
   });
@@ -1045,7 +1082,12 @@ bindActions();
   // First paint can run before grid tracks resolve; force layout so Monaco is not 0×0.
   requestEditorLayout();
   void restoreSession()
-    .then(openStartupArgs)
+    .then(async () => {
+      await syncSystemIntegrationPreferences();
+      await openStartupArgs();
+      openRequestsReady = true;
+      await drainOpenRequests();
+    })
     .finally(markAppReady);
   log("Notra Monaco UI ready");
 }
@@ -1186,6 +1228,8 @@ function bindActions() {
     openCommandPalette();
   });
   $("settingsResetViewButton").addEventListener("click", resetEditorView);
+  $("settingsShellIntegrationButton").addEventListener("click", () => void toggleShellIntegration());
+  $("settingsDefaultAppButton").addEventListener("click", () => void toggleDefaultAppCandidate());
   $("settingsOpenFindButton").addEventListener("click", () => {
     closeSettingsPage();
     setFindView("find");
@@ -1660,6 +1704,7 @@ function openSettingsPage() {
   $("app").classList.add("settings-open");
   $("settingsButton").classList.add("active");
   renderSettingsMenu();
+  void refreshSystemIntegrationStatus();
 }
 
 function closeSettingsPage() {
@@ -1669,9 +1714,121 @@ function closeSettingsPage() {
 }
 
 function selectSettingsSection(section: SettingsSection) {
-  if (!["appearance", "editor", "workspace", "search", "about"].includes(section)) return;
+  if (!["appearance", "editor", "workspace", "system", "search", "about"].includes(section)) return;
   state.settingsSection = section;
   renderSettingsMenu();
+  if (section === "system") void refreshSystemIntegrationStatus();
+}
+
+async function refreshSystemIntegrationStatus() {
+  await Promise.all([refreshShellIntegrationStatus(), refreshDefaultAppCandidateStatus()]);
+}
+
+async function refreshShellIntegrationStatus() {
+  try {
+    state.shellIntegration = await invoke<ShellIntegrationStatusDto>("shell_integration_status");
+  } catch (error) {
+    state.shellIntegration = integrationErrorStatus("以 Notra 打开", "读取右键菜单状态", error);
+  } finally {
+    state.shellIntegrationLoaded = true;
+    renderSettingsMenu();
+  }
+}
+
+async function refreshDefaultAppCandidateStatus() {
+  try {
+    state.defaultAppCandidate = await invoke<ShellIntegrationStatusDto>("default_app_candidate_status");
+  } catch (error) {
+    state.defaultAppCandidate = integrationErrorStatus("Windows 默认应用候选", "读取默认应用候选状态", error);
+  } finally {
+    state.defaultAppCandidateLoaded = true;
+    renderSettingsMenu();
+  }
+}
+
+async function syncSystemIntegrationPreferences() {
+  const [contextMenu, defaultApp] = await Promise.allSettled([
+    invoke<ShellIntegrationStatusDto>("set_shell_integration", { enabled: state.contextMenuEnabled }),
+    invoke<ShellIntegrationStatusDto>("set_default_app_candidate", { enabled: state.defaultAppCandidateEnabled }),
+  ]);
+  state.shellIntegration = contextMenu.status === "fulfilled"
+    ? contextMenu.value
+    : integrationErrorStatus("以 Notra 打开", "同步右键菜单", contextMenu.reason);
+  state.defaultAppCandidate = defaultApp.status === "fulfilled"
+    ? defaultApp.value
+    : integrationErrorStatus("Windows 默认应用候选", "同步默认应用候选", defaultApp.reason);
+  state.shellIntegrationLoaded = true;
+  state.defaultAppCandidateLoaded = true;
+  renderSettingsMenu();
+}
+
+async function toggleShellIntegration() {
+  if (state.shellIntegrationBusy || !state.shellIntegrationLoaded || !state.shellIntegration.supported) return;
+  const enabled = !state.shellIntegration.enabled;
+  state.shellIntegrationBusy = true;
+  renderSettingsMenu();
+  try {
+    state.shellIntegration = await invoke<ShellIntegrationStatusDto>("set_shell_integration", { enabled });
+    state.contextMenuEnabled = enabled;
+    scheduleSessionSave();
+    log(enabled ? "已添加“以 Notra 打开”右键菜单" : "已移除“以 Notra 打开”右键菜单");
+  } catch (error) {
+    state.shellIntegration.detail = integrationErrorMessage(`${enabled ? "添加" : "移除"}右键菜单`, error);
+    log(state.shellIntegration.detail);
+  } finally {
+    state.shellIntegrationBusy = false;
+    state.shellIntegrationLoaded = true;
+    renderSettingsMenu();
+  }
+}
+
+async function toggleDefaultAppCandidate() {
+  if (
+    state.defaultAppCandidateBusy
+    || !state.defaultAppCandidateLoaded
+    || !state.defaultAppCandidate.supported
+  ) return;
+  const enabled = !state.defaultAppCandidate.enabled;
+  state.defaultAppCandidateBusy = true;
+  renderSettingsMenu();
+  try {
+    state.defaultAppCandidate = await invoke<ShellIntegrationStatusDto>("set_default_app_candidate", { enabled });
+    state.defaultAppCandidateEnabled = enabled;
+    scheduleSessionSave();
+    log(enabled ? "已注册 Notra 默认应用候选" : "已移除 Notra 默认应用候选");
+  } catch (error) {
+    state.defaultAppCandidate.detail = integrationErrorMessage(
+      `${enabled ? "注册" : "移除"}默认应用候选`,
+      error,
+    );
+    log(state.defaultAppCandidate.detail);
+  } finally {
+    state.defaultAppCandidateBusy = false;
+    state.defaultAppCandidateLoaded = true;
+    renderSettingsMenu();
+  }
+}
+
+function integrationErrorStatus(label: string, action: string, error: unknown): ShellIntegrationStatusDto {
+  return {
+    supported: false,
+    enabled: false,
+    label,
+    detail: integrationErrorMessage(action, error),
+  };
+}
+
+function integrationErrorMessage(action: string, error: unknown) {
+  return `${action}失败：${error instanceof Error ? error.message : String(error)}`;
+}
+
+function bindOpenRequestListener() {
+  void listen("open-request", () => {
+    if (!openRequestsReady) return;
+    openRequestTask = openRequestTask
+      .then(drainOpenRequests)
+      .catch((error) => log(`接收系统打开请求失败：${String(error)}`));
+  }).catch((error) => log(`监听系统打开请求失败：${String(error)}`));
 }
 
 function setThemeMode(darkMode: boolean) {
@@ -2141,8 +2298,10 @@ async function openPath(path: string, remember = false) {
 function addOrReplaceDocument(dto: DocumentDto, origin: DocumentOrigin) {
   const existing = state.documents.find((doc) => doc.path && doc.path === dto.path);
   if (existing) {
-    existing.model.setValue(dto.text);
-    Object.assign(existing, dto, { dirty: false, savedText: dto.text, encodingStatus: "编码已识别" });
+    if (!existing.dirty) {
+      existing.model.setValue(dto.text);
+      Object.assign(existing, dto, { dirty: false, savedText: dto.text, encodingStatus: "编码已识别" });
+    }
     if (origin === "standalone") existing.origin = "standalone";
     activateDocument(existing.id);
     return;
@@ -4027,6 +4186,57 @@ function renderSettingsMenu() {
   setSegmentedValue("settingsMarkdownWidthControl", state.markdownContentWidth);
   setSegmentedValue("settingsMarkdownControl", state.markdownEditMode);
   setSegmentedValue("settingsModeControl", state.mode === "workspace" && state.workspace ? "workspace" : "single");
+  const integrationStatus = $("settingsShellIntegrationStatus");
+  const integrationButton = $<HTMLButtonElement>("settingsShellIntegrationButton");
+  $("settingsShellIntegrationDetail").textContent = state.shellIntegration.detail;
+  integrationStatus.textContent = !state.shellIntegrationLoaded
+    ? "检测中"
+    : state.shellIntegrationBusy
+      ? "处理中"
+      : state.shellIntegration.supported
+        ? state.shellIntegration.enabled ? "已开启" : "未开启"
+        : "不支持";
+  integrationStatus.classList.toggle("enabled", state.shellIntegration.enabled && !state.shellIntegrationBusy);
+  integrationStatus.classList.toggle("unsupported", state.shellIntegrationLoaded && !state.shellIntegration.supported);
+  integrationButton.textContent = state.shellIntegrationBusy
+    ? "处理中"
+    : state.shellIntegration.enabled ? "关闭" : "开启";
+  integrationButton.disabled =
+    !state.shellIntegrationLoaded || state.shellIntegrationBusy || !state.shellIntegration.supported;
+  integrationButton.setAttribute("aria-pressed", String(state.shellIntegration.enabled));
+  renderSystemIntegrationControl(
+    "settingsDefaultAppDetail",
+    "settingsDefaultAppStatus",
+    "settingsDefaultAppButton",
+    state.defaultAppCandidate,
+    state.defaultAppCandidateLoaded,
+    state.defaultAppCandidateBusy,
+  );
+}
+
+function renderSystemIntegrationControl(
+  detailId: string,
+  statusId: string,
+  buttonId: string,
+  status: ShellIntegrationStatusDto,
+  loaded: boolean,
+  busy: boolean,
+) {
+  const statusElement = $(statusId);
+  const button = $<HTMLButtonElement>(buttonId);
+  $(detailId).textContent = status.detail;
+  statusElement.textContent = !loaded
+    ? "检测中"
+    : busy
+      ? "处理中"
+      : status.supported
+        ? status.enabled ? "已开启" : "未开启"
+        : "不支持";
+  statusElement.classList.toggle("enabled", status.enabled && !busy);
+  statusElement.classList.toggle("unsupported", loaded && !status.supported);
+  button.textContent = busy ? "处理中" : status.enabled ? "关闭" : "开启";
+  button.disabled = !loaded || busy || !status.supported;
+  button.setAttribute("aria-pressed", String(status.enabled));
 }
 
 function setSegmentedValue(id: string, value: string) {
@@ -5504,6 +5714,8 @@ async function restoreSession() {
     state.mode = snapshot.workMode ?? (snapshot.workspaceRoot ? "workspace" : "single");
     state.rightTool = snapshot.rightTool === "outline" ? "outline" : "search";
     state.rightSidebarWidth = snapshot.rightSidebarWidth ?? state.rightSidebarWidth;
+    state.contextMenuEnabled = snapshot.contextMenuEnabled ?? true;
+    state.defaultAppCandidateEnabled = snapshot.defaultAppCandidateEnabled ?? true;
     setRightSidebarWidth(state.rightSidebarWidth);
     state.markdownEditMode = isMarkdownEditMode(snapshot.markdownEditMode)
       ? snapshot.markdownEditMode
@@ -5638,24 +5850,31 @@ async function restoreSession() {
 async function openStartupArgs() {
   try {
     const args = await invoke<StartupArgsDto>("startup_args");
-    if (args.directories[0]) {
-      const workspace = await invoke<WorkspaceDto>("read_workspace", { path: args.directories[0] });
-      state.workspace = workspace;
-      state.mode = "workspace";
-      state.showDirectory = true;
-      ($("directoryInput") as HTMLInputElement).value = workspace.root;
-      log(`启动目录 ${workspace.name}`);
-    }
-    for (const path of args.files) {
-      await openPath(path, args.directories.length === 0);
-    }
-    if (args.files.length > 0 || args.directories.length > 0) {
-      renderAll();
-      scheduleSessionSave();
-    }
+    await applyOpenRequest(args);
   } catch (error) {
     log(`启动参数处理失败：${String(error)}`);
   }
+}
+
+async function drainOpenRequests() {
+  const requests = await invoke<StartupArgsDto[]>("take_open_requests");
+  for (const request of requests) {
+    await applyOpenRequest(request);
+  }
+}
+
+async function applyOpenRequest(args: StartupArgsDto) {
+  if (args.files.length === 0 && args.directories.length === 0) return;
+  closeMenus();
+  closeSettingsPage();
+  if (args.directories[0]) {
+    await openWorkspacePath(args.directories[0]);
+  }
+  for (const path of args.files) {
+    await openPath(path, args.directories.length === 0);
+  }
+  renderAll();
+  scheduleSessionSave();
 }
 
 function applySearchSnapshot(snapshot: Partial<SessionSnapshot>) {
@@ -5749,7 +5968,7 @@ async function saveSession() {
   if (activeBeforeSave) activeBeforeSave.viewState = editor.saveViewState() ?? undefined;
   const active = activeDocument();
   const snapshot: SessionSnapshot = {
-    version: 5,
+    version: 6,
     openFiles: uniquePaths(state.documents.flatMap((doc) => (doc.path ? [doc.path] : []))),
     draftDocuments: draftDocumentSnapshots(),
     documentOrigins: Object.fromEntries(
@@ -5767,6 +5986,8 @@ async function saveSession() {
     activePath: active?.path ?? null,
     activeDraftId: active && !active.path ? ensureDraftId(active) : null,
     darkMode: state.darkMode,
+    contextMenuEnabled: state.contextMenuEnabled,
+    defaultAppCandidateEnabled: state.defaultAppCandidateEnabled,
     rightSidebarOpen: !$("findPopover").classList.contains("hidden"),
     rightTool: state.rightTool,
     rightSidebarWidth: state.rightSidebarWidth,

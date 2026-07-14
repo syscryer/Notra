@@ -2,6 +2,7 @@
 
 mod app;
 mod session_store;
+mod shell_integration;
 
 fn main() {
     app::run();

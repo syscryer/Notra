@@ -4,12 +4,15 @@ use notra_core::{
     document::EDITABLE_FILE_LIMIT_BYTES, preview_directory_replace, search_directory,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::Manager;
+use std::sync::Mutex;
+use tauri::{Emitter, Manager};
 
 use crate::session_store::SessionStore;
+use crate::shell_integration::ShellIntegrationStatus;
 
 const SUPPORTED_LANGUAGES: &[&str] = &[
     "plaintext",
@@ -135,6 +138,24 @@ pub struct TreeItemDto {
 pub struct StartupArgsDto {
     pub files: Vec<String>,
     pub directories: Vec<String>,
+}
+
+#[derive(Default)]
+struct OpenRequestQueue(Mutex<VecDeque<StartupArgsDto>>);
+
+impl OpenRequestQueue {
+    fn push(&self, request: StartupArgsDto) {
+        if let Ok(mut queue) = self.0.lock() {
+            queue.push_back(request);
+        }
+    }
+
+    fn drain(&self) -> Vec<StartupArgsDto> {
+        self.0
+            .lock()
+            .map(|mut queue| queue.drain(..).collect())
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -286,6 +307,20 @@ pub struct WorkspacePathRequest {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            let request = classify_open_args(args.into_iter().skip(1), Some(Path::new(&cwd)));
+            if !request.files.is_empty() || !request.directories.is_empty() {
+                if let Some(queue) = app.try_state::<OpenRequestQueue>() {
+                    queue.push(request);
+                }
+                let _ = app.emit("open-request", ());
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .setup(|app| {
             let database_path = app
                 .path()
@@ -295,6 +330,7 @@ pub fn run() {
             let store = SessionStore::new(database_path);
             store.initialize().map_err(std::io::Error::other)?;
             app.manage(store);
+            app.manage(OpenRequestQueue::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -317,6 +353,11 @@ pub fn run() {
             preview_workspace_replace,
             apply_workspace_replace,
             startup_args,
+            take_open_requests,
+            shell_integration_status,
+            set_shell_integration,
+            default_app_candidate_status,
+            set_default_app_candidate,
             supported_languages,
             supported_encodings,
         ])
@@ -660,10 +701,48 @@ fn supported_encodings() -> Vec<&'static str> {
 
 #[tauri::command]
 fn startup_args() -> StartupArgsDto {
+    let cwd = std::env::current_dir().ok();
+    classify_open_args(std::env::args().skip(1), cwd.as_deref())
+}
+
+#[tauri::command]
+fn take_open_requests(queue: tauri::State<'_, OpenRequestQueue>) -> Vec<StartupArgsDto> {
+    queue.drain()
+}
+
+#[tauri::command]
+fn shell_integration_status() -> Result<ShellIntegrationStatus, String> {
+    crate::shell_integration::status()
+}
+
+#[tauri::command]
+fn set_shell_integration(enabled: bool) -> Result<ShellIntegrationStatus, String> {
+    crate::shell_integration::set_enabled(enabled)
+}
+
+#[tauri::command]
+fn default_app_candidate_status() -> Result<ShellIntegrationStatus, String> {
+    crate::shell_integration::default_app_status()
+}
+
+#[tauri::command]
+fn set_default_app_candidate(enabled: bool) -> Result<ShellIntegrationStatus, String> {
+    crate::shell_integration::set_default_app_enabled(enabled)
+}
+
+fn classify_open_args<I>(args: I, cwd: Option<&Path>) -> StartupArgsDto
+where
+    I: IntoIterator<Item = String>,
+{
     let mut files = Vec::new();
     let mut directories = Vec::new();
-    for arg in std::env::args().skip(1) {
+    for arg in args {
         let path = PathBuf::from(arg);
+        let path = if path.is_relative() {
+            cwd.map(|cwd| cwd.join(&path)).unwrap_or(path)
+        } else {
+            path
+        };
         if path.is_file() {
             files.push(path.display().to_string());
         } else if path.is_dir() {

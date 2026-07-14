@@ -3114,6 +3114,49 @@ tbody tr.result-active {
   background: var(--surface-2);
 }
 
+.settings-action:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.settings-action:disabled:hover {
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+
+.shell-integration-control {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px !important;
+}
+
+.settings-status-pill {
+  min-width: 58px;
+  height: 24px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  color: var(--text-3);
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.settings-status-pill.enabled {
+  border-color: color-mix(in srgb, var(--green) 38%, var(--line-soft));
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 10%, var(--surface));
+}
+
+.settings-status-pill.unsupported {
+  opacity: 0.72;
+}
+
 .font-control {
   width: min(600px, 100%);
   min-width: 0;
@@ -3344,6 +3387,7 @@ tbody tr.result-active {
   .settings-row > .seg-control,
   .settings-row > .stepper,
   .settings-row > .font-control,
+  .settings-row > .shell-integration-control,
   .settings-row > .settings-action {
     grid-column: 2;
     justify-self: start;
