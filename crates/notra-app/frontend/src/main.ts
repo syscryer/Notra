@@ -705,7 +705,6 @@ let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
 let editorBusyDepth = 0;
 let titlebarMaximizeToggleAt = 0;
-let titlebarDragState: { pointerId: number; startX: number; startY: number } | null = null;
 let rightSidebarResizeState: { pointerId: number } | null = null;
 let markdownPreviewTimer = 0;
 let markdownPreviewRenderVersion = 0;
@@ -1790,44 +1789,23 @@ function setMarkdownEditMode(mode: MarkdownEditMode) {
 
 function bindWindowControls() {
   const titlebar = $("windowTitlebar");
-  titlebar.addEventListener("pointerdown", (event) => {
+  titlebar.addEventListener("mousedown", (event) => {
     if (event.button !== 0 || isInteractiveTarget(event.target)) return;
+    event.preventDefault();
     if (event.detail >= 2) {
-      event.preventDefault();
-      clearTitlebarDragState(titlebar, event.pointerId);
       toggleTitlebarMaximize();
       return;
     }
-    titlebarDragState = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
-    titlebar.setPointerCapture(event.pointerId);
-  });
-  titlebar.addEventListener("pointermove", (event) => {
-    if (!titlebarDragState || titlebarDragState.pointerId !== event.pointerId) return;
-    const deltaX = Math.abs(event.clientX - titlebarDragState.startX);
-    const deltaY = Math.abs(event.clientY - titlebarDragState.startY);
-    if (deltaX < 4 && deltaY < 4) return;
-    clearTitlebarDragState(titlebar, event.pointerId);
     void appWindow.startDragging();
   });
   titlebar.addEventListener("dblclick", (event) => {
     if (isInteractiveTarget(event.target)) return;
     event.preventDefault();
-    clearTitlebarDragState(titlebar);
     toggleTitlebarMaximize();
   });
-  titlebar.addEventListener("pointerup", (event) => clearTitlebarDragState(titlebar, event.pointerId));
-  titlebar.addEventListener("pointercancel", (event) => clearTitlebarDragState(titlebar, event.pointerId));
   $("windowMinimize").addEventListener("click", () => void appWindow.minimize());
   $("windowMaximize").addEventListener("click", () => void appWindow.toggleMaximize());
   $("windowClose").addEventListener("click", () => void requestWindowClose());
-}
-
-function clearTitlebarDragState(titlebar: HTMLElement, pointerId?: number) {
-  const activePointer = pointerId ?? titlebarDragState?.pointerId;
-  if (activePointer !== undefined && titlebar.hasPointerCapture(activePointer)) {
-    titlebar.releasePointerCapture(activePointer);
-  }
-  titlebarDragState = null;
 }
 
 function toggleTitlebarMaximize() {

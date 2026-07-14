@@ -118,6 +118,10 @@ export class ParagraphFrontButton {
                 return;
             if (!isMouseEvent(event))
                 return;
+            if (this.muya.domNode.closest('[aria-hidden="true"]')) {
+                this.hide();
+                return;
+            }
 
             const { x, y } = event;
             const els = [

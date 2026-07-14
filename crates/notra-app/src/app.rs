@@ -11,8 +11,6 @@ use tauri::Manager;
 
 use crate::session_store::SessionStore;
 
-const TREE_LIMIT: usize = 50_000;
-const TREE_MAX_DEPTH: usize = 8;
 const SUPPORTED_LANGUAGES: &[&str] = &[
     "plaintext",
     "abap",
@@ -693,7 +691,7 @@ fn document_to_dto(doc: Document) -> DocumentDto {
 
 fn workspace_to_dto(root: &Path) -> WorkspaceDto {
     let mut items = Vec::new();
-    collect_tree_items(root, 0, 0, &mut items);
+    collect_tree_items(root, 0, &mut items);
     WorkspaceDto {
         root: root.display().to_string(),
         name: root
@@ -705,11 +703,7 @@ fn workspace_to_dto(root: &Path) -> WorkspaceDto {
     }
 }
 
-fn collect_tree_items(root: &Path, depth: usize, reserved: usize, out: &mut Vec<TreeItemDto>) {
-    if depth > TREE_MAX_DEPTH || out.len().saturating_add(reserved) >= TREE_LIMIT {
-        return;
-    }
-
+fn collect_tree_items(root: &Path, depth: usize, out: &mut Vec<TreeItemDto>) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
     };
@@ -734,12 +728,7 @@ fn collect_tree_items(root: &Path, depth: usize, reserved: usize, out: &mut Vec<
         (is_file, entry.2.to_ascii_lowercase())
     });
 
-    let entry_count = entries.len();
-    for (index, (_entry, file_type, name, path)) in entries.into_iter().enumerate() {
-        let remaining_siblings = entry_count - index - 1;
-        if out.len().saturating_add(reserved + remaining_siblings) >= TREE_LIMIT {
-            break;
-        }
+    for (_entry, file_type, name, path) in entries {
         let is_dir = file_type.is_dir();
         out.push(TreeItemDto {
             path: path.display().to_string(),
@@ -748,7 +737,7 @@ fn collect_tree_items(root: &Path, depth: usize, reserved: usize, out: &mut Vec<
             is_dir,
         });
         if is_dir {
-            collect_tree_items(&path, depth + 1, reserved + remaining_siblings, out);
+            collect_tree_items(&path, depth + 1, out);
         }
     }
 }
