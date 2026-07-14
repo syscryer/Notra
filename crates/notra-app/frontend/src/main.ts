@@ -712,12 +712,22 @@ let markdownPreviewRenderVersion = 0;
 let markdownModelSyncTimer = 0;
 let currentFindTimer = 0;
 let markdownEditor: MarkdownEditorBridge | null = null;
-let markdownEditorPromise: Promise<MarkdownEditorBridge> | null = null;
 let markdownModulePromise: Promise<typeof import("./markdownEditor")> | null = null;
 let markdownEditorDocumentId = 0;
 let markdownSyncingFromEditor = false;
 let markdownImageObserver: MutationObserver | null = null;
 let markdownImageRefreshFrame = 0;
+
+type MarkdownEditorCacheEntry = {
+  documentId: number;
+  bridge: MarkdownEditorBridge;
+  pane: HTMLElement;
+  lastUsed: number;
+};
+
+const MAX_MARKDOWN_EDITOR_CACHE = 3;
+const markdownEditorCache = new globalThis.Map<number, MarkdownEditorCacheEntry>();
+const markdownEditorPromises = new globalThis.Map<number, Promise<MarkdownEditorCacheEntry | null>>();
 
 type UnsavedChoice = "save" | "discard" | "cancel";
 type TreeContextTarget = {
@@ -1769,6 +1779,7 @@ function setMarkdownEditMode(mode: MarkdownEditMode) {
     markdownEditor?.hideFloatTools();
   }
   state.markdownEditMode = mode;
+  if (mode !== "wysiwyg") attachEditorModel(activeDocument());
   closeMenus();
   renderMarkdownSurface();
   renderChrome();
@@ -2089,9 +2100,11 @@ function activateDocument(id: number) {
   if (!doc) return;
   const previous = activeDocument();
   if (previous && previous.id !== id) syncMarkdownModelFromEditor(previous);
-  if (previous && previous.id !== id) previous.viewState = editor.saveViewState() ?? undefined;
+  if (previous && previous.id !== id && editor.getModel() === previous.model) {
+    previous.viewState = editor.saveViewState() ?? undefined;
+  }
   state.activeId = id;
-  attachEditorModel(doc);
+  if (!isMarkdownLikeDocument(doc) || state.markdownEditMode !== "wysiwyg") attachEditorModel(doc);
   renderAll();
   scheduleSessionSave();
 }
@@ -2135,6 +2148,13 @@ async function openDocument() {
 }
 
 async function openPath(path: string, remember = false) {
+  const existing = state.documents.find((doc) => doc.path === path);
+  if (existing) {
+    if (remember) existing.origin = "standalone";
+    activateDocument(existing.id);
+    if (remember) rememberRecentPath(path);
+    return;
+  }
   const dto = await withBusy(`打开 ${fileNameFromPath(path)}`, () => invoke<DocumentDto>("open_path", { path }));
   addOrReplaceDocument(dto, remember ? "standalone" : "workspace");
   if (remember) rememberRecentPath(path);
@@ -2276,6 +2296,7 @@ async function closeWorkspace() {
   const active = activeDocument();
   if (active) active.viewState = editor.saveViewState() ?? undefined;
   const workspaceDocumentIds = new Set(workspaceDocuments.map((doc) => doc.id));
+  workspaceDocuments.forEach((doc) => disposeMarkdownEditor(doc.id));
   state.documents = state.documents.filter((doc) => !workspaceDocumentIds.has(doc.id));
   workspaceDocuments.forEach((doc) => doc.model.dispose());
   if (state.documents.length === 0) state.documents.push(createUntitledDocument());
@@ -2319,6 +2340,7 @@ async function closeDocument(id: number): Promise<boolean> {
   if (index < 0) return false;
   const doc = state.documents[index];
   if (!(await confirmDocumentCanClose(doc, "关闭文档"))) return false;
+  disposeMarkdownEditor(doc.id);
   state.documents.splice(index, 1);
   doc.model.dispose();
   if (state.documents.length === 0) state.documents.push(createUntitledDocument());
@@ -2841,7 +2863,10 @@ function removeOpenDocumentsForDeletedPath(path: string, isDir: boolean) {
   const removedActive = state.documents.some((doc) => doc.id === state.activeId && doc.path && pathMatchesTarget(doc.path, path, isDir));
   const remaining = state.documents.filter((doc) => {
     const remove = doc.path && pathMatchesTarget(doc.path, path, isDir);
-    if (remove) doc.model.dispose();
+    if (remove) {
+      disposeMarkdownEditor(doc.id);
+      doc.model.dispose();
+    }
     return !remove;
   });
   state.documents = remaining;
@@ -4400,15 +4425,18 @@ function renderMarkdownSurface() {
   const doc = activeDocument();
   const markdownDocument = isMarkdownLikeDocument(doc);
   const wantsWysiwyg = markdownDocument && state.markdownEditMode === "wysiwyg";
-  if (wantsWysiwyg && !markdownEditor) void ensureMarkdownEditor(doc);
+  const cachedEntry = wantsWysiwyg ? markdownEditorCache.get(doc.id) : null;
+  if (cachedEntry) activateMarkdownEditor(cachedEntry, doc);
+  else if (wantsWysiwyg && !state.restoring) void ensureMarkdownEditor(doc);
 
-  const showWysiwyg = wantsWysiwyg && Boolean(markdownEditor);
-  $("editor").classList.toggle("hidden", showWysiwyg);
-  $("markdownWysiwyg").classList.toggle("hidden", !showWysiwyg);
+  const showWysiwyg = wantsWysiwyg && markdownEditorDocumentId === doc.id && Boolean(markdownEditor);
+  $("editor").style.zIndex = showWysiwyg ? "0" : "2";
+  $("editor").setAttribute("aria-hidden", String(showWysiwyg));
+  $("markdownWysiwyg").style.zIndex = showWysiwyg ? "2" : "0";
+  $("markdownWysiwyg").setAttribute("aria-hidden", String(!showWysiwyg));
   $("editor").parentElement?.classList.toggle("wysiwyg-open", showWysiwyg);
 
   if (showWysiwyg) {
-    syncMarkdownEditorFromModel(doc);
     markdownEditor?.setReadOnly(editorBusyDepth > 0 || doc.readOnly);
     scheduleMarkdownImageRefresh();
   } else {
@@ -4419,41 +4447,107 @@ function renderMarkdownSurface() {
 }
 
 async function ensureMarkdownEditor(doc: OpenDocument) {
-  if (markdownEditor) return markdownEditor;
-  if (!markdownEditorPromise) {
-    markdownEditorPromise = loadMarkdownModule()
-      .then(({ MarkdownEditorBridge }) => {
-        const bridge = new MarkdownEditorBridge({
-          element: $("markdownWysiwyg"),
-          markdown: doc.model.getValue(),
-          darkMode: state.darkMode,
-          fontSize: state.fontSize,
-          fontFamily: resolveEditorFontStack(),
-          readOnly: editorBusyDepth > 0 || doc.readOnly,
-          pickImagePath: pickMarkdownImagePath,
-          openLink: openMarkdownLink,
-          onHeadingAnchorCopied: (anchor) => log(`已复制标题锚点 ${anchor}`),
-          onChange: handleMarkdownEditorChange,
-        });
-        markdownEditor = bridge;
-        markdownEditorDocumentId = doc.id;
-        observeMarkdownImages(bridge.root);
-        return bridge;
-      })
-      .catch((error) => {
-        markdownEditorPromise = null;
-        log(`Markdown 即时编辑器加载失败：${String(error)}`);
-        throw error;
-      });
+  const cached = markdownEditorCache.get(doc.id);
+  if (cached) {
+    activateMarkdownEditor(cached, doc);
+    return cached.bridge;
   }
-  const bridge = await markdownEditorPromise;
+
+  let promise = markdownEditorPromises.get(doc.id);
+  if (!promise) {
+    promise = createMarkdownEditor(doc).finally(() => {
+      markdownEditorPromises.delete(doc.id);
+    });
+    markdownEditorPromises.set(doc.id, promise);
+  }
+
+  const entry = await promise;
+  if (!entry) return null;
   const active = activeDocument();
-  if (isMarkdownLikeDocument(active) && state.markdownEditMode === "wysiwyg") {
-    syncMarkdownEditorFromModel(active, true);
+  if (active.id === doc.id && isMarkdownLikeDocument(active) && state.markdownEditMode === "wysiwyg") {
+    activateMarkdownEditor(entry, active, true);
     renderMarkdownSurface();
-    bridge.focus();
   }
-  return bridge;
+  return entry.bridge;
+}
+
+async function createMarkdownEditor(doc: OpenDocument): Promise<MarkdownEditorCacheEntry | null> {
+  try {
+    const { MarkdownEditorBridge } = await loadMarkdownModule();
+    if (!state.documents.some((item) => item.id === doc.id)) return null;
+
+    const pane = document.createElement("div");
+    pane.className = "markdown-editor-pane";
+    pane.dataset.documentId = String(doc.id);
+    pane.style.zIndex = "0";
+    pane.setAttribute("aria-hidden", "true");
+    $("markdownWysiwyg").append(pane);
+
+    let bridge: MarkdownEditorBridge | null = null;
+    bridge = new MarkdownEditorBridge({
+      element: pane,
+      markdown: doc.model.getValue(),
+      darkMode: state.darkMode,
+      fontSize: state.fontSize,
+      fontFamily: resolveEditorFontStack(),
+      readOnly: editorBusyDepth > 0 || doc.readOnly,
+      pickImagePath: pickMarkdownImagePath,
+      openLink: openMarkdownLink,
+      onHeadingAnchorCopied: (anchor) => log(`已复制标题锚点 ${anchor}`),
+      onChange: (markdown) => {
+        if (bridge) handleMarkdownEditorChange(doc.id, bridge, markdown);
+      },
+    });
+    const entry = { documentId: doc.id, bridge, pane: bridge.root, lastUsed: performance.now() };
+    markdownEditorCache.set(doc.id, entry);
+    evictMarkdownEditorCache(doc.id);
+    return entry;
+  } catch (error) {
+    log(`Markdown 即时编辑器加载失败：${String(error)}`);
+    throw error;
+  }
+}
+
+function activateMarkdownEditor(entry: MarkdownEditorCacheEntry, doc: OpenDocument, focus = false) {
+  const alreadyActive = markdownEditor === entry.bridge && markdownEditorDocumentId === doc.id;
+  markdownEditorCache.forEach((item) => {
+    const inactive = item.documentId !== doc.id;
+    item.pane.style.zIndex = inactive ? "0" : "1";
+    item.pane.setAttribute("aria-hidden", String(inactive));
+  });
+  if (!alreadyActive) {
+    markdownEditor = entry.bridge;
+    markdownEditorDocumentId = doc.id;
+    entry.bridge.updateAppearance(state.darkMode, state.fontSize, resolveEditorFontStack());
+    observeMarkdownImages(entry.bridge.root);
+  }
+  entry.lastUsed = performance.now();
+  syncMarkdownEditorFromModel(doc, focus);
+}
+
+function evictMarkdownEditorCache(keepDocumentId: number) {
+  while (markdownEditorCache.size > MAX_MARKDOWN_EDITOR_CACHE) {
+    const candidate = Array.from(markdownEditorCache.values())
+      .filter((entry) => entry.documentId !== keepDocumentId)
+      .sort((left, right) => left.lastUsed - right.lastUsed)[0];
+    if (!candidate) return;
+    disposeMarkdownEditor(candidate.documentId);
+  }
+}
+
+function disposeMarkdownEditor(documentId: number) {
+  const entry = markdownEditorCache.get(documentId);
+  if (!entry) return;
+  if (markdownEditorDocumentId === documentId) {
+    markdownImageObserver?.disconnect();
+    markdownImageObserver = null;
+    window.cancelAnimationFrame(markdownImageRefreshFrame);
+    markdownEditor = null;
+    markdownEditorDocumentId = 0;
+  }
+  entry.bridge.destroy();
+  entry.pane.remove();
+  markdownEditorCache.delete(documentId);
 }
 
 function loadMarkdownModule() {
@@ -4466,17 +4560,18 @@ function loadMarkdownModule() {
   return markdownModulePromise;
 }
 
-function handleMarkdownEditorChange(markdown: string) {
-  const doc = state.documents.find((item) => item.id === markdownEditorDocumentId);
+function handleMarkdownEditorChange(documentId: number, bridge: MarkdownEditorBridge, markdown: string) {
+  const doc = state.documents.find((item) => item.id === documentId);
   const modelMarkdown = doc ? markdownForDocumentModel(doc, markdown) : markdown;
   if (
     !doc ||
     doc.id !== state.activeId ||
     state.markdownEditMode !== "wysiwyg" ||
+    bridge !== markdownEditor ||
     doc.readOnly ||
     modelMarkdown === doc.model.getValue()
   ) {
-    if (doc && modelMarkdown === doc.model.getValue()) markdownEditor?.markSynchronized(markdown);
+    if (doc && modelMarkdown === doc.model.getValue()) bridge.markSynchronized(markdown);
     return;
   }
   markdownSyncingFromEditor = true;
@@ -4485,7 +4580,7 @@ function handleMarkdownEditorChange(markdown: string) {
   } finally {
     markdownSyncingFromEditor = false;
   }
-  markdownEditor?.markSynchronized(markdown);
+  bridge.markSynchronized(markdown);
   scheduleMarkdownImageRefresh();
 }
 
@@ -4533,8 +4628,8 @@ function syncMarkdownModelFromEditor(doc = activeDocument()) {
   ) {
     return;
   }
-  const editorMarkdown = markdownEditor.getMarkdown();
   if (!markdownEditor.hasUnsynchronizedChanges()) return;
+  const editorMarkdown = markdownEditor.getMarkdown();
   const markdown = markdownForDocumentModel(doc, editorMarkdown);
   if (markdown === doc.model.getValue()) {
     markdownEditor.markSynchronized(editorMarkdown);
@@ -5540,6 +5635,7 @@ async function restoreSession() {
     log(`会话恢复失败：${String(error)}`);
   } finally {
     state.restoring = false;
+    renderMarkdownSurface();
     // Force a layout after shell chrome settles; Monaco can paint blank if height was 0 at create.
     window.requestAnimationFrame(() => {
       restoreEditorSurface();

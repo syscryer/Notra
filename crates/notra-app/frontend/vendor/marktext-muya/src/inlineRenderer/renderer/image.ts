@@ -201,6 +201,7 @@ export default function image(
             const data = {
                 props: {
                     alt: alt.replace(/[`*{}[\]()#+\-.!_>~:|<$]/g, ''),
+                    referrerPolicy: 'no-referrer',
                     src: imgSrc,
                     title,
                 },

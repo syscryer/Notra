@@ -145,6 +145,7 @@ export async function loadImage(url: string, detectContentType = false): Promise
 
     return new Promise((resolve, reject) => {
         const image = new Image();
+        image.referrerPolicy = 'no-referrer';
         image.onload = () => {
             resolve({
                 url,

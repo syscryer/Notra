@@ -40,6 +40,7 @@ export default function loadImageAsync(
             .then(({ url, width, height }) => {
                 const imageText: HTMLElement | null = document.querySelector(`#${id}`);
                 const img = document.createElement('img');
+                img.referrerPolicy = 'no-referrer';
                 img.src = url;
                 if (attrs.alt)
                     img.alt = attrs.alt.replace(/[`*{}[\]()#+\-.!_>~:|<$]/g, '');

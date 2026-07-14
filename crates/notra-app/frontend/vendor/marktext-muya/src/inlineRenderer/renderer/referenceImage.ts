@@ -61,7 +61,9 @@ export default function referenceImage(
                 // Prefer the resolved URL from the loadImageAsync cache; fall
                 // back to the raw src if the cache hasn't been populated for
                 // some reason.
-                h(`img.${CLASS_NAMES.MU_COPY_REMOVE}`, { props: { alt, src: resolvedSrc ?? src, title } }),
+                h(`img.${CLASS_NAMES.MU_COPY_REMOVE}`, {
+                    props: { alt, referrerPolicy: 'no-referrer', src: resolvedSrc ?? src, title },
+                }),
             ]
         : [h(selector, tag)];
 }

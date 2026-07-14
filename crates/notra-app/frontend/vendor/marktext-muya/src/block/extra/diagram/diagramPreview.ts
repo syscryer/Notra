@@ -10,11 +10,79 @@ import Parent from '../../base/parent';
 const debug = logger('diagramPreview:');
 let mermaidRenderId = 0;
 
+interface IMermaidRenderJob {
+    target: HTMLElement;
+    run: () => Promise<void>;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+}
+
+const mermaidRenderJobs: IMermaidRenderJob[] = [];
+let mermaidRenderRunning = false;
+
+function diagramDistanceFromViewport(target: HTMLElement): number {
+    if (!target.isConnected)
+        return Number.MAX_SAFE_INTEGER;
+    const rect = target.getBoundingClientRect();
+    if (rect.bottom >= 0 && rect.top <= window.innerHeight)
+        return 0;
+    return rect.top > window.innerHeight ? rect.top - window.innerHeight : -rect.bottom;
+}
+
+function waitForDiagramRenderOpportunity(): Promise<void> {
+    return new Promise((resolve) => {
+        if (typeof window.requestIdleCallback === 'function') {
+            window.requestIdleCallback(() => resolve(), { timeout: 80 });
+        }
+        else {
+            window.requestAnimationFrame(() => resolve());
+        }
+    });
+}
+
+async function drainMermaidRenderQueue(): Promise<void> {
+    if (mermaidRenderRunning)
+        return;
+    mermaidRenderRunning = true;
+    try {
+        while (mermaidRenderJobs.length > 0) {
+            await waitForDiagramRenderOpportunity();
+            mermaidRenderJobs.sort(
+                (left, right) => diagramDistanceFromViewport(left.target) - diagramDistanceFromViewport(right.target),
+            );
+            const job = mermaidRenderJobs.shift()!;
+            if (!job.target.isConnected) {
+                job.resolve();
+                continue;
+            }
+            try {
+                await job.run();
+                job.resolve();
+            }
+            catch (error) {
+                job.reject(error);
+            }
+        }
+    }
+    finally {
+        mermaidRenderRunning = false;
+        if (mermaidRenderJobs.length > 0)
+            void drainMermaidRenderQueue();
+    }
+}
+
+function scheduleMermaidRender(target: HTMLElement, run: () => Promise<void>): Promise<void> {
+    return new Promise((resolve, reject) => {
+        mermaidRenderJobs.push({ target, run, resolve, reject });
+        void drainMermaidRenderQueue();
+    });
+}
+
 function applyDiagramSizeClass(svg: SVGSVGElement, width: number, height: number): void {
     svg.classList.remove('mu-diagram-wide', 'mu-diagram-balanced', 'mu-diagram-portrait');
     const ratio = height > 0 ? width / height : 1;
     svg.classList.add(
-        ratio >= 1.2
+        ratio >= 1.2 || width >= 900
             ? 'mu-diagram-wide'
             : ratio >= 0.75
                 ? 'mu-diagram-balanced'
@@ -22,18 +90,22 @@ function applyDiagramSizeClass(svg: SVGSVGElement, width: number, height: number
     );
 }
 
-function compactDisconnectedMermaidRoots(svg: SVGSVGElement, code: string): void {
+function compactDisconnectedMermaidRoots(svg: SVGSVGElement, code: string): boolean {
     const direction = code.match(/^\s*(?:flowchart|graph)\s+(TD|TB|BT|LR|RL)\b/im)?.[1];
     const graphRoot = svg.querySelector<SVGGElement>('g.root');
     const nodes = graphRoot?.querySelector<SVGGElement>(':scope > g.nodes');
-    if (!direction || !nodes)
-        return;
+    if (!direction || !graphRoot || !nodes)
+        return false;
+
+    const edgePaths = graphRoot.querySelector<SVGGElement>(':scope > g.edgePaths');
+    if (edgePaths?.querySelector('path'))
+        return false;
 
     const roots = Array.from(nodes.children).filter(
         (child): child is SVGGElement => child instanceof SVGGElement && child.classList.contains('root'),
     );
     if (roots.length < 2)
-        return;
+        return false;
 
     const subgraphIds = Array.from(code.matchAll(/^\s*subgraph\s+([A-Za-z0-9_-]+)/gim), match => match[1]);
     roots.sort((left, right) => {
@@ -56,7 +128,7 @@ function compactDisconnectedMermaidRoots(svg: SVGSVGElement, code: string): void
         : Math.max(...boxes.map(box => box.height));
     const currentBounds = nodes.getBBox();
     if (currentBounds.width <= expectedWidth * 2.5 && currentBounds.height <= expectedHeight * 2.5)
-        return;
+        return false;
 
     const inset = 8;
     let offset = inset;
@@ -67,6 +139,7 @@ function compactDisconnectedMermaidRoots(svg: SVGSVGElement, code: string): void
         root.setAttribute('transform', `translate(${x - box.x}, ${y - box.y})`);
         offset += (vertical ? box.height : box.width) + gap;
     });
+    return true;
 }
 
 // Give a fixed-size `<svg>` a viewBox when needed, then classify its aspect
@@ -142,6 +215,27 @@ async function renderDiagram({
     plantumlServer,
     sequenceTheme,
 }: IRenderOptions) {
+    if (type === 'mermaid') {
+        await scheduleMermaidRender(target, async () => {
+            const render = await loadRenderer(type);
+            render.initialize({
+                startOnLoad: false,
+                securityLevel: 'strict',
+                theme: mermaidTheme,
+            });
+            const id = `muya-mermaid-${Date.now()}-${++mermaidRenderId}`;
+            const { svg, bindFunctions } = await render.render(id, code);
+            target.innerHTML = svg;
+            bindFunctions?.(target);
+            const renderedSvg = target.querySelector<SVGSVGElement>('svg');
+            const compacted = renderedSvg
+                ? compactDisconnectedMermaidRoots(renderedSvg, code)
+                : false;
+            finalizeSvg(target, compacted);
+        });
+        return;
+    }
+
     const render = await loadRenderer(type);
     const options = {};
     if (type === 'vega-lite') {
@@ -175,21 +269,6 @@ async function renderDiagram({
         // clip a wide diagram, not scale it. Derive a viewBox from those pixel
         // dimensions (once the async draw completes) so it scales to fit.
         ensureViewBox(target);
-    }
-    else if (type === 'mermaid') {
-        render.initialize({
-            startOnLoad: false,
-            securityLevel: 'strict',
-            theme: mermaidTheme,
-        });
-        const id = `muya-mermaid-${Date.now()}-${++mermaidRenderId}`;
-        const { svg, bindFunctions } = await render.render(id, code);
-        target.innerHTML = svg;
-        bindFunctions?.(target);
-        const renderedSvg = target.querySelector<SVGSVGElement>('svg');
-        if (renderedSvg)
-            compactDisconnectedMermaidRoots(renderedSvg, code);
-        finalizeSvg(target, true);
     }
 }
 

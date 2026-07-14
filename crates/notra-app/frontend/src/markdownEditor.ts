@@ -49,6 +49,16 @@ export type MarkdownPreviewOptions = {
 let markdownDiagramId = 0;
 let mermaidRenderQueue = Promise.resolve();
 
+function waitForDiagramRenderOpportunity() {
+  return new Promise<void>((resolve) => {
+    if (typeof window.requestIdleCallback === "function") {
+      window.requestIdleCallback(() => resolve(), { timeout: 80 });
+    } else {
+      window.requestAnimationFrame(() => resolve());
+    }
+  });
+}
+
 function normalizeMarkdownForEngine(markdown: string) {
   return markdown.replace(/\r\n?/g, "\n");
 }
@@ -120,7 +130,8 @@ export function renderMarkdownPreviewHtml(markdown: string, options: MarkdownPre
     frontMatter: true,
     isGitlabCompatibilityEnabled: true,
   });
-  return `<article class="markdown-body" data-theme="${options.darkMode ? "dark" : "light"}">${body}</article>`;
+  const imageSafeBody = body.replace(/<img\b(?![^>]*\breferrerpolicy=)/gi, '<img referrerpolicy="no-referrer"');
+  return `<article class="markdown-body" data-theme="${options.darkMode ? "dark" : "light"}">${imageSafeBody}</article>`;
 }
 
 export async function renderMarkdownPreviewDiagrams(root: HTMLElement, options: MarkdownPreviewOptions) {
@@ -183,6 +194,8 @@ async function renderDiagram(code: HTMLElement, options: MarkdownPreviewOptions)
 
 async function renderMermaidDiagram(pre: HTMLPreElement, source: string, darkMode: boolean) {
   const task = mermaidRenderQueue.then(async () => {
+    await waitForDiagramRenderOpportunity();
+    if (!pre.isConnected) return;
     const { default: mermaid } = await import("mermaid");
     mermaid.initialize({
       startOnLoad: false,
@@ -195,8 +208,10 @@ async function renderMermaidDiagram(pre: HTMLPreElement, source: string, darkMod
     container.innerHTML = svg;
     pre.replaceWith(container);
     const renderedSvg = container.querySelector<SVGSVGElement>("svg");
-    if (renderedSvg) compactDisconnectedMermaidRoots(renderedSvg, source);
-    finalizePreviewDiagramSvg(container, true);
+    const compacted = renderedSvg
+      ? compactDisconnectedMermaidRoots(renderedSvg, source)
+      : false;
+    finalizePreviewDiagramSvg(container, compacted);
     bindFunctions?.(container);
   });
   mermaidRenderQueue = task.catch(() => undefined);
@@ -285,7 +300,7 @@ function finalizePreviewDiagramSvg(container: HTMLElement, tightenViewBox = fals
   svg.classList.remove("markdown-diagram-wide", "markdown-diagram-balanced", "markdown-diagram-portrait");
   const ratio = width / height;
   svg.classList.add(
-    ratio >= 1.2
+    ratio >= 1.2 || width >= 900
       ? "markdown-diagram-wide"
       : ratio >= 0.75
         ? "markdown-diagram-balanced"
@@ -298,12 +313,15 @@ function compactDisconnectedMermaidRoots(svg: SVGSVGElement, source: string) {
   const direction = source.match(/^\s*(?:flowchart|graph)\s+(TD|TB|BT|LR|RL)\b/im)?.[1];
   const graphRoot = svg.querySelector<SVGGElement>("g.root");
   const nodes = graphRoot?.querySelector<SVGGElement>(":scope > g.nodes");
-  if (!direction || !nodes) return;
+  if (!direction || !graphRoot || !nodes) return false;
+
+  const edgePaths = graphRoot.querySelector<SVGGElement>(":scope > g.edgePaths");
+  if (edgePaths?.querySelector("path")) return false;
 
   const roots = Array.from(nodes.children).filter(
     (child): child is SVGGElement => child instanceof SVGGElement && child.classList.contains("root"),
   );
-  if (roots.length < 2) return;
+  if (roots.length < 2) return false;
 
   const subgraphIds = Array.from(
     source.matchAll(/^\s*subgraph\s+([A-Za-z0-9_-]+)/gim),
@@ -326,7 +344,7 @@ function compactDisconnectedMermaidRoots(svg: SVGSVGElement, source: string) {
     ? boxes.reduce((total, box) => total + box.height, 0) + gap * (boxes.length - 1)
     : Math.max(...boxes.map((box) => box.height));
   const currentBounds = nodes.getBBox();
-  if (currentBounds.width <= expectedWidth * 2.5 && currentBounds.height <= expectedHeight * 2.5) return;
+  if (currentBounds.width <= expectedWidth * 2.5 && currentBounds.height <= expectedHeight * 2.5) return false;
 
   const inset = 8;
   let offset = inset;
@@ -337,6 +355,7 @@ function compactDisconnectedMermaidRoots(svg: SVGSVGElement, source: string) {
     root.setAttribute("transform", `translate(${x - box.x}, ${y - box.y})`);
     offset += (vertical ? box.height : box.width) + gap;
   });
+  return true;
 }
 
 function diagramContainer(type: string) {
@@ -493,8 +512,11 @@ export class MarkdownEditorBridge {
   }
 
   setReadOnly(readOnly: boolean) {
-    this.root.contentEditable = readOnly ? "false" : "true";
-    this.root.setAttribute("aria-readonly", String(readOnly));
+    const contentEditable = readOnly ? "false" : "true";
+    if (this.root.contentEditable !== contentEditable) this.root.contentEditable = contentEditable;
+    if (this.root.getAttribute("aria-readonly") !== String(readOnly)) {
+      this.root.setAttribute("aria-readonly", String(readOnly));
+    }
   }
 
   focus() {
