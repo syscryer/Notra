@@ -16,6 +16,9 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("monaco-editor")) return "monaco";
+          const normalizedId = id.replaceAll("\\", "/");
+          // Prism grammars must stay as dynamic chunks so dependency order is preserved.
+          if (normalizedId.includes("/node_modules/prismjs/components/prism-")) return;
           if (id.includes("node_modules")) return "vendor";
         },
       },
