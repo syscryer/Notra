@@ -2981,6 +2981,217 @@ tbody tr.result-active {
   box-shadow: 0 10px 26px rgba(15, 23, 42, 0.04);
 }
 
+.keymap-profile-list {
+  margin-bottom: 18px;
+}
+
+.keymap-profile-control button {
+  min-width: 84px;
+}
+
+.keybinding-section-head {
+  margin-bottom: 8px;
+}
+
+.keybinding-toolbar {
+  max-width: 900px;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.keybinding-search {
+  min-width: 0;
+  flex: 1;
+  height: 36px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  color: var(--text-3);
+  background: var(--surface);
+}
+
+.keybinding-search:focus-within {
+  border-color: var(--primary-3);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+
+.keybinding-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.keybinding-list {
+  max-width: 900px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.keybinding-row {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(170px, 240px) 96px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 6px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.keybinding-row:last-child {
+  border-bottom: 0;
+}
+
+.keybinding-row:hover {
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
+}
+
+.keybinding-command {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.keybinding-command strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.keybinding-command span,
+.keybinding-source {
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.keybinding-value {
+  min-width: 0;
+  height: 30px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: var(--surface-2);
+  text-align: left;
+}
+
+.command-row strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-row > span {
+  color: var(--text-3);
+  font-size: 10px;
+}
+
+.keybinding-value:hover,
+.keybinding-value:focus-visible,
+.keybinding-value.recording {
+  border-color: var(--primary-3);
+  outline: 0;
+  background: var(--primary-2);
+}
+
+.keybinding-value.recording {
+  color: var(--primary);
+}
+
+.keybinding-value.conflict {
+  border-color: color-mix(in srgb, var(--danger) 56%, transparent);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 7%, var(--surface));
+}
+
+.keybinding-value kbd,
+.command-row kbd {
+  min-width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-bottom-color: color-mix(in srgb, var(--line) 72%, var(--text-3));
+  border-radius: 4px;
+  color: inherit;
+  background: var(--surface);
+  box-shadow: 0 1px 0 var(--line-soft);
+  font: 500 10px/1 var(--shell-font);
+  white-space: nowrap;
+}
+
+.keybinding-empty {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.keybinding-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.keybinding-reset {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-3);
+  background: transparent;
+}
+
+.keybinding-reset:hover {
+  color: var(--primary);
+  background: var(--primary-2);
+}
+
+.keybinding-reset:disabled {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.keybinding-hint {
+  color: var(--primary);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.notra-bookmark-glyph {
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 5px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
 .settings-row {
   min-height: 62px;
   border: 0;
@@ -3401,6 +3612,30 @@ tbody tr.result-active {
 
   .font-input {
     grid-column: 1;
+  }
+
+  .keybinding-row {
+    grid-template-columns: minmax(0, 1fr) minmax(150px, 210px) 72px;
+  }
+}
+
+@media (max-width: 720px) {
+  .keybinding-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .keybinding-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .keybinding-value {
+    grid-column: 1;
+  }
+
+  .keybinding-actions {
+    grid-column: 2;
+    grid-row: 1 / span 2;
   }
 }
 

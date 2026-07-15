@@ -93,6 +93,19 @@ import type {
   MarkdownEditorBridge,
   MarkdownSearchOptions,
 } from "./markdownEditor";
+import {
+  KEYMAP_PROFILE_LABELS,
+  ariaKeyShortcut,
+  bindingLabel,
+  bindingStartsWith,
+  commandBindings,
+  isKeymapProfile,
+  keyboardEventStroke,
+  normalizeBinding,
+  resolveKeymapProfile,
+  type KeybindingOverrides,
+  type KeymapProfile,
+} from "./keybindings";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
@@ -201,6 +214,27 @@ interface OpenDocument extends DocumentDto {
   encodingStatus: "编码已识别" | "重新解释" | "转换待保存";
 }
 
+interface ClosedDocumentSnapshot extends DocumentDto {
+  draftId?: string;
+  dirty: boolean;
+  savedText: string;
+  origin: DocumentOrigin;
+  viewState?: monaco.editor.ICodeEditorViewState;
+}
+
+type CommandCategory = "文件" | "标签" | "编辑" | "选择" | "查找" | "导航" | "视图" | "书签" | "Markdown";
+
+interface AppCommand {
+  id: string;
+  title: string;
+  category: CommandCategory;
+  run: () => void | Promise<void>;
+  enabled?: () => boolean;
+  when?: () => boolean;
+  allowInInput?: boolean;
+  priority?: number;
+}
+
 interface DraftDocumentSnapshot {
   id: string;
   title: string;
@@ -253,6 +287,9 @@ interface SessionSnapshot {
   editorFontMode: FontMode;
   editorFontPreset: EditorFontPreset;
   editorFontCustom: string;
+  keymapProfile: KeymapProfile;
+  keybindingOverrides: KeybindingOverrides;
+  bookmarks: Record<string, number[]>;
   matchCase: boolean;
   wholeWord: boolean;
   reverseSearch: boolean;
@@ -351,7 +388,7 @@ type FindView = "find" | "replace" | "workspace-find" | "workspace-replace";
 type RightTool = "search" | "outline";
 type SearchScope = "current" | "open" | "workspace";
 type RenderWhitespaceMode = "none" | "selection" | "all";
-type SettingsSection = "appearance" | "editor" | "workspace" | "system" | "search" | "about";
+type SettingsSection = "appearance" | "editor" | "keybindings" | "workspace" | "system" | "search" | "about";
 type FontMode = "preset" | "custom";
 type ShellFontPreset = "system" | "segoe" | "yahei" | "dengxian" | "sourceHanSans" | "misans";
 type EditorFontPreset = "cascadia" | "jetbrains" | "consolas" | "firaCode" | "sourceCodePro";
@@ -694,6 +731,9 @@ const state = {
   editorFontMode: "preset" as FontMode,
   editorFontPreset: DEFAULT_EDITOR_FONT_PRESET as EditorFontPreset,
   editorFontCustom: EDITOR_FONT_STACKS[DEFAULT_EDITOR_FONT_PRESET],
+  keymapProfile: "vscode" as KeymapProfile,
+  keybindingOverrides: {} as KeybindingOverrides,
+  bookmarks: {} as Record<string, number[]>,
   settingsSection: "appearance" as SettingsSection,
   shellIntegration: {
     supported: false,
@@ -716,6 +756,7 @@ const state = {
   rightTool: "search" as RightTool,
   rightSidebarWidth: 420,
   busyMessage: "",
+  keybindingHint: "",
   restoring: false,
 };
 
@@ -731,6 +772,15 @@ let activeSearchDecoration: monaco.editor.IEditorDecorationsCollection | null = 
 let windowCloseConfirmed = false;
 let commandActions: Array<() => void> = [];
 let commandActiveIndex = 0;
+let commandPaletteMode: "commands" | "files" = "commands";
+const appCommands = new globalThis.Map<string, AppCommand>();
+const closedDocuments: ClosedDocumentSnapshot[] = [];
+let pendingKeybindingChord = "";
+let pendingKeybindingChordTimer = 0;
+let recordingKeybindingCommandId = "";
+let recordingKeybindingStrokes: string[] = [];
+let recordingKeybindingTimer = 0;
+let bookmarkDecorations: monaco.editor.IEditorDecorationsCollection | null = null;
 let tabMenuDocumentId = 0;
 let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
@@ -1040,37 +1090,51 @@ function bootstrap() {
     cursorSmoothCaretAnimation: "on",
     cursorBlinking: "smooth",
     bracketPairColorization: { enabled: true },
-    guides: { bracketPairs: true, indentation: true },
+    guides: {
+      bracketPairs: false,
+      indentation: true,
+      highlightActiveIndentation: true,
+    },
+    matchBrackets: "always",
     stickyScroll: { enabled: false },
     folding: true,
+    foldingHighlight: true,
+    showFoldingControls: "mouseover",
     wordWrap: state.wordWrap ? "on" : "off",
     largeFileOptimizations: true,
     renderWhitespace: state.renderWhitespace,
     occurrencesHighlight: "singleFile",
-    suggest: { preview: true, showWords: true },
+    selectionHighlight: true,
+    autoIndent: "full",
+    autoClosingBrackets: "languageDefined",
+    autoClosingQuotes: "languageDefined",
+    autoSurround: "languageDefined",
+    dragAndDrop: true,
+    links: true,
+    hover: { enabled: true, delay: 300 },
+    parameterHints: { enabled: true, cycle: true },
+    suggest: { preview: true, showWords: true, selectionMode: "always" },
+    tabCompletion: "on",
     wordBasedSuggestions: "currentDocument",
     quickSuggestions: { other: true, comments: false, strings: false },
+    multiCursorModifier: "alt",
+    multiCursorPaste: "spread",
+    copyWithSyntaxHighlighting: true,
+    unicodeHighlight: {
+      ambiguousCharacters: true,
+      invisibleCharacters: true,
+      nonBasicASCII: false,
+    },
   });
 
   searchDecorations = editor.createDecorationsCollection();
   activeSearchDecoration = editor.createDecorationsCollection();
+  bookmarkDecorations = editor.createDecorationsCollection();
   editor.onDidScrollChange(syncMarkdownPreviewScroll);
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyF, () => {
-    setFindView("find");
-    toggleFindOpen({ prefillFromSelection: true });
-  });
   const editorResizeObserver = new ResizeObserver(() => requestEditorLayout());
   editorResizeObserver.observe($("editor"));
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyH, () => {
-    setFindView("replace");
-    toggleFindOpen({ prefillFromSelection: true });
-  });
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => {
-    void openWorkspaceFind("workspace-find");
-  });
-  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyH, () => {
-    void openWorkspaceFind("workspace-replace");
-  });
+  registerAppCommands();
+  bindKeybindings();
 
 bindActions();
   bindWindowControls();
@@ -1100,6 +1164,223 @@ function markAppReady() {
       $("bootSplash")?.remove();
     });
   });
+}
+
+function registerAppCommands() {
+  appCommands.clear();
+  const editorOnly = () => isEditorSurfaceFocused() && !isMarkdownWysiwygActive();
+  const markdownOnly = () => isEditorSurfaceFocused() && isMarkdownLikeDocument();
+  const commands: AppCommand[] = [
+    command("file.new", "新建文件", "文件", newDocument, { allowInInput: true }),
+    command("file.open", "打开文件", "文件", () => openDocument(), { allowInInput: true }),
+    command("file.openFolder", "打开工作区", "文件", () => chooseWorkspace(), { allowInInput: true }),
+    command("file.openRecent", "最近打开", "文件", () => toggleMenu("recentMenu"), { allowInInput: true }),
+    command("workspace.close", "关闭工作区", "文件", closeWorkspace, { enabled: () => Boolean(state.workspace) }),
+    command("workspace.singleMode", "切换到单文件模式", "视图", () => setWorkMode("single")),
+    command("workspace.folderMode", "切换到工作区模式", "视图", enterWorkspaceMode),
+    command("file.save", "保存", "文件", () => saveActive(), { allowInInput: true }),
+    command("file.saveAs", "另存为", "文件", () => saveAsActive(), { allowInInput: true }),
+    command("file.saveAll", "保存全部", "文件", () => saveAll(), { allowInInput: true }),
+    command("file.close", "关闭当前标签", "文件", async () => { await closeDocument(activeDocument().id); }, { allowInInput: true }),
+    command("file.reopenClosed", "重新打开已关闭标签", "文件", reopenClosedDocument, {
+      allowInInput: true,
+      enabled: () => closedDocuments.length > 0,
+    }),
+    command("tabs.next", "切换到下一个标签", "标签", () => activateAdjacentDocument(1), { allowInInput: true }),
+    command("tabs.previous", "切换到上一个标签", "标签", () => activateAdjacentDocument(-1), { allowInInput: true }),
+    command("tabs.closeOthers", "关闭其他标签", "标签", () => closeOtherTabsFor(state.activeId)),
+    command("tabs.closeRight", "关闭右侧标签", "标签", () => closeTabsToRightFor(state.activeId)),
+    command("tabs.closeSaved", "关闭已保存标签", "标签", closeSavedTabs),
+    command("edit.undo", "撤销", "编辑", undoEditor, { when: () => isEditorSurfaceFocused() }),
+    command("edit.redo", "重做", "编辑", redoEditor, { when: () => isEditorSurfaceFocused() }),
+    command("edit.cut", "剪切", "编辑", () => runEditorAction("editor.action.clipboardCutAction"), { when: () => isEditorSurfaceFocused() }),
+    command("edit.copy", "复制", "编辑", () => runEditorAction("editor.action.clipboardCopyAction"), { when: () => isEditorSurfaceFocused() }),
+    command("edit.paste", "粘贴", "编辑", () => runEditorAction("editor.action.clipboardPasteAction"), { when: () => isEditorSurfaceFocused() }),
+    command("edit.pastePlain", "粘贴为纯文本", "编辑", pastePlainText, { when: () => isEditorSurfaceFocused() }),
+    command("edit.selectAll", "全选", "选择", selectAllEditor, { when: () => isEditorSurfaceFocused() }),
+    command("edit.uppercase", "转为大写", "编辑", transformToUppercase, { when: editorOnly }),
+    command("edit.lowercase", "转为小写", "编辑", transformToLowercase, { when: editorOnly }),
+    editorCommand("editor.duplicateLineDown", "向下复制行", "editor.action.copyLinesDownAction", editorOnly),
+    editorCommand("editor.insertLineAfter", "在下方插入行", "editor.action.insertLineAfter", editorOnly),
+    editorCommand("editor.insertLineBefore", "在上方插入行", "editor.action.insertLineBefore", editorOnly),
+    editorCommand("editor.indentLines", "增加行缩进", "editor.action.indentLines", editorOnly),
+    editorCommand("editor.outdentLines", "减少行缩进", "editor.action.outdentLines", editorOnly),
+    editorCommand("editor.deleteLine", "删除当前行", "editor.action.deleteLines", editorOnly),
+    editorCommand("editor.moveLineUp", "向上移动行", "editor.action.moveLinesUpAction", editorOnly),
+    editorCommand("editor.moveLineDown", "向下移动行", "editor.action.moveLinesDownAction", editorOnly),
+    editorCommand("editor.toggleLineComment", "切换行注释", "editor.action.commentLine", editorOnly),
+    editorCommand("editor.toggleBlockComment", "切换块注释", "editor.action.blockComment", editorOnly),
+    editorCommand("editor.formatDocument", "格式化文档", "editor.action.formatDocument", editorOnly),
+    editorCommand("editor.selectNextOccurrence", "选中下一个同词", "editor.action.addSelectionToNextFindMatch", editorOnly),
+    editorCommand("editor.selectAllOccurrences", "选中所有同词", "editor.action.selectHighlights", editorOnly),
+    editorCommand("editor.addCursorAbove", "在上方添加光标", "editor.action.insertCursorAbove", editorOnly),
+    editorCommand("editor.addCursorBelow", "在下方添加光标", "editor.action.insertCursorBelow", editorOnly),
+    editorCommand("editor.triggerSuggest", "触发建议", "editor.action.triggerSuggest", editorOnly),
+    editorCommand("editor.triggerParameterHints", "触发参数提示", "editor.action.triggerParameterHints", editorOnly),
+    editorCommand("editor.quickOutline", "转到文件中的符号", "editor.action.quickOutline", editorOnly),
+    editorCommand("editor.goToBracket", "跳转到匹配括号", "editor.action.jumpToBracket", editorOnly),
+    editorCommand("editor.renameSymbol", "重命名符号", "editor.action.rename", editorOnly),
+    editorCommand("editor.fold", "折叠当前区域", "editor.fold", editorOnly),
+    editorCommand("editor.unfold", "展开当前区域", "editor.unfold", editorOnly),
+    editorCommand("editor.foldAll", "全部折叠", "editor.foldAll", editorOnly),
+    editorCommand("editor.unfoldAll", "全部展开", "editor.unfoldAll", editorOnly),
+    editorCommand("editor.trimTrailingWhitespace", "删除行尾空白", "editor.action.trimTrailingWhitespace", editorOnly),
+    editorCommand("editor.sortLinesAscending", "按升序排列行", "editor.action.sortLinesAscending", editorOnly),
+    editorCommand("editor.sortLinesDescending", "按降序排列行", "editor.action.sortLinesDescending", editorOnly),
+    command("search.find", "查找", "查找", () => openCurrentFind("find"), { when: () => isEditorSurfaceFocused() }),
+    command("search.replace", "替换", "查找", () => openCurrentFind("replace"), { when: () => isEditorSurfaceFocused() }),
+    command("search.next", "查找下一个", "查找", () => findNextResult(), { when: () => isEditorSurfaceFocused() }),
+    command("search.previous", "查找上一个", "查找", () => findPreviousResult(), { when: () => isEditorSurfaceFocused() }),
+    command("search.workspaceFind", "在文件中查找", "查找", () => openWorkspaceFind("workspace-find"), { enabled: () => Boolean(state.workspace) }),
+    command("search.workspaceReplace", "在文件中替换", "查找", () => openWorkspaceFind("workspace-replace"), { enabled: () => Boolean(state.workspace) }),
+    command("search.findAllCurrent", "查找当前文件全部结果", "查找", () => findCurrent(true), { when: () => isEditorSurfaceFocused() }),
+    command("search.clearResults", "清除查找结果", "查找", clearSearchResults),
+    command("navigation.goToLine", "跳转到行", "导航", goToLine, { when: () => isEditorSurfaceFocused() }),
+    command("navigation.quickOpen", "快速打开文件", "导航", openQuickOpen, { allowInInput: true }),
+    command("navigation.commandPalette", "命令面板", "导航", () => openCommandPalette("commands"), { allowInInput: true }),
+    command("navigation.focusExplorer", "聚焦文件资源管理器", "导航", focusExplorer, { enabled: () => Boolean(state.workspace) }),
+    command("view.toggleExplorer", "切换文件资源管理器", "视图", toggleExplorer, { allowInInput: true }),
+    command("view.openSettings", "打开设置", "视图", openSettingsPage, { allowInInput: true }),
+    command("view.toggleRightSidebar", "切换右侧栏", "视图", toggleRightSidebar, { allowInInput: true }),
+    command("view.toggleWordWrap", "切换自动换行", "视图", toggleWordWrap),
+    command("view.toggleMinimap", "切换缩略图", "视图", toggleMinimap),
+    command("view.toggleWhitespace", "切换空白符", "视图", cycleWhitespace),
+    command("view.zoomIn", "增大编辑器字号", "视图", () => setFontSize(state.fontSize + 1), { allowInInput: true }),
+    command("view.zoomOut", "减小编辑器字号", "视图", () => setFontSize(state.fontSize - 1), { allowInInput: true }),
+    command("view.zoomReset", "重置编辑器字号", "视图", () => setFontSize(DEFAULT_EDITOR_FONT_SIZE), { allowInInput: true }),
+    command("view.toggleTheme", "切换主题", "视图", toggleTheme, { allowInInput: true }),
+    command("bookmark.toggle", "切换书签", "书签", toggleBookmark, { when: editorOnly }),
+    command("bookmark.next", "下一个书签", "书签", () => navigateBookmark(1), { when: editorOnly }),
+    command("bookmark.previous", "上一个书签", "书签", () => navigateBookmark(-1), { when: editorOnly }),
+    command("markdown.outline", "Markdown 大纲", "Markdown", openMarkdownOutline, { when: markdownOnly, priority: 20 }),
+    markdownCommand("markdown.bold", "粗体", "format:strong", markdownOnly),
+    markdownCommand("markdown.italic", "斜体", "format:em", markdownOnly),
+    markdownCommand("markdown.inlineCode", "行内代码", "format:inline_code", markdownOnly),
+    markdownCommand("markdown.link", "插入链接", "format:link", markdownOnly),
+    markdownCommand("markdown.heading1", "一级标题", "paragraph:heading 1", markdownOnly),
+    markdownCommand("markdown.heading2", "二级标题", "paragraph:heading 2", markdownOnly),
+    markdownCommand("markdown.heading3", "三级标题", "paragraph:heading 3", markdownOnly),
+    markdownCommand("markdown.heading4", "四级标题", "paragraph:heading 4", markdownOnly),
+    markdownCommand("markdown.heading5", "五级标题", "paragraph:heading 5", markdownOnly),
+    markdownCommand("markdown.heading6", "六级标题", "paragraph:heading 6", markdownOnly),
+    markdownCommand("markdown.paragraph", "正文", "paragraph:paragraph", markdownOnly),
+    markdownCommand("markdown.insertImage", "插入图片", "insert:image", markdownOnly),
+    markdownCommand("markdown.insertTable", "插入表格", "insert:table", markdownOnly),
+    markdownCommand("markdown.codeBlock", "插入代码块", "paragraph:pre", markdownOnly),
+    markdownCommand("markdown.mathBlock", "插入公式块", "paragraph:mathblock", markdownOnly),
+    command("markdown.modeWysiwyg", "Markdown 即时编辑", "Markdown", () => setMarkdownEditMode("wysiwyg"), { when: markdownOnly }),
+    command("markdown.modeSplit", "Markdown 分屏预览", "Markdown", () => setMarkdownEditMode("split"), { when: markdownOnly }),
+    command("markdown.modeSource", "Markdown 源码", "Markdown", () => setMarkdownEditMode("source"), { when: markdownOnly }),
+  ];
+  commands.forEach((item) => appCommands.set(item.id, item));
+}
+
+function command(
+  id: string,
+  title: string,
+  category: CommandCategory,
+  run: () => void | Promise<void>,
+  options: Omit<AppCommand, "id" | "title" | "category" | "run"> = {},
+): AppCommand {
+  return { id, title, category, run, ...options };
+}
+
+function editorCommand(id: string, title: string, actionId: string, when: () => boolean): AppCommand {
+  return command(id, title, "编辑", () => runEditorAction(actionId), { when });
+}
+
+function markdownCommand(id: string, title: string, action: string, when: () => boolean): AppCommand {
+  return command(id, title, "Markdown", () => runMarkdownShortcutAction(action), { when, priority: 20 });
+}
+
+function bindKeybindings() {
+  document.addEventListener("keydown", handleAppKeybinding, true);
+}
+
+function handleAppKeybinding(event: KeyboardEvent) {
+  if (recordingKeybindingCommandId) {
+    handleKeybindingRecorder(event);
+    return;
+  }
+  const stroke = keyboardEventStroke(event);
+  if (!stroke) return;
+  const targetIsInput = isEditableShortcutTarget(event.target);
+  const chord = pendingKeybindingChord ? `${pendingKeybindingChord} ${stroke}` : stroke;
+  const exact = matchingCommands(chord, targetIsInput);
+  const prefix = hasMatchingChordPrefix(chord, targetIsInput);
+  if (exact.length > 0 && !prefix) {
+    event.preventDefault();
+    event.stopPropagation();
+    clearPendingKeybindingChord();
+    void executeAppCommand(exact[0]);
+    return;
+  }
+  if (prefix) {
+    event.preventDefault();
+    event.stopPropagation();
+    setPendingKeybindingChord(chord);
+    return;
+  }
+  if (pendingKeybindingChord) {
+    clearPendingKeybindingChord();
+    const standalone = matchingCommands(stroke, targetIsInput);
+    if (standalone.length > 0) {
+      event.preventDefault();
+      event.stopPropagation();
+      void executeAppCommand(standalone[0]);
+    }
+  }
+}
+
+function matchingCommands(binding: string, targetIsInput: boolean) {
+  return [...appCommands.values()]
+    .filter((item) => commandIsAvailable(item, targetIsInput))
+    .filter((item) => activeCommandBindings(item.id).includes(binding))
+    .sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+}
+
+function hasMatchingChordPrefix(binding: string, targetIsInput: boolean) {
+  return [...appCommands.values()]
+    .filter((item) => commandIsAvailable(item, targetIsInput))
+    .some((item) => activeCommandBindings(item.id).some((candidate) => bindingStartsWith(candidate, binding)));
+}
+
+function commandIsAvailable(item: AppCommand, targetIsInput = false) {
+  if (targetIsInput && !item.allowInInput) return false;
+  return (item.when?.() ?? true) && (item.enabled?.() ?? true);
+}
+
+async function executeAppCommand(item: AppCommand) {
+  closeMenus();
+  await item.run();
+}
+
+function activeCommandBindings(commandId: string) {
+  return commandBindings(commandId, state.keymapProfile, state.mode, state.keybindingOverrides);
+}
+
+function setPendingKeybindingChord(value: string) {
+  pendingKeybindingChord = value;
+  window.clearTimeout(pendingKeybindingChordTimer);
+  pendingKeybindingChordTimer = window.setTimeout(clearPendingKeybindingChord, 1600);
+  state.keybindingHint = `${value} 等待下一按键`;
+  renderChrome();
+}
+
+function clearPendingKeybindingChord() {
+  window.clearTimeout(pendingKeybindingChordTimer);
+  pendingKeybindingChord = "";
+  state.keybindingHint = "";
+  if (editor) renderChrome();
+}
+
+function isEditableShortcutTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function isEditorSurfaceFocused() {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && Boolean(active.closest("#editor, #markdownWysiwygHost, #markdownPreview"));
 }
 
 function bindActions() {
@@ -1136,7 +1417,7 @@ function bindActions() {
     setFindView("replace");
     toggleFindOpen({ prefillFromSelection: true });
   });
-  $("commandButton").addEventListener("click", openCommandPalette);
+  $("commandButton").addEventListener("click", () => openCommandPalette("commands"));
   $("goToLineButton").addEventListener("click", goToLine);
   $("wordWrapButton").addEventListener("click", toggleWordWrap);
   $("findRailButton").addEventListener("click", () => {
@@ -1213,6 +1494,7 @@ function bindActions() {
   bindSegmentedSetting("settingsWordWrapControl", (value) => setWordWrap(value === "on"));
   bindSegmentedSetting("settingsMinimapControl", (value) => setMinimap(value === "on"));
   bindSegmentedSetting("settingsWhitespaceControl", (value) => setWhitespace(value as RenderWhitespaceMode));
+  bindSegmentedSetting("settingsKeymapProfileControl", (value) => setKeymapProfile(value));
   bindSegmentedSetting("settingsMarkdownWidthControl", (value) => setMarkdownContentWidth(value));
   bindSegmentedSetting("settingsMarkdownControl", (value) => setMarkdownEditMode(value as MarkdownEditMode));
   bindSegmentedSetting("settingsModeControl", (value) => {
@@ -1228,6 +1510,10 @@ function bindActions() {
     openCommandPalette();
   });
   $("settingsResetViewButton").addEventListener("click", resetEditorView);
+  $("keybindingSearchInput").addEventListener("input", renderKeybindingSettings);
+  $("importKeybindingsButton").addEventListener("click", () => void importKeybindings());
+  $("exportKeybindingsButton").addEventListener("click", () => void exportKeybindings());
+  $("resetAllKeybindingsButton").addEventListener("click", () => void resetAllKeybindings());
   $("settingsShellIntegrationButton").addEventListener("click", () => void toggleShellIntegration());
   $("settingsDefaultAppButton").addEventListener("click", () => void toggleDefaultAppCandidate());
   $("settingsOpenFindButton").addEventListener("click", () => {
@@ -1340,20 +1626,6 @@ function bindActions() {
       }
     });
   });
-
-
-  document.addEventListener("keydown", (event) => {
-    if (!(event.ctrlKey || event.metaKey) || event.altKey || event.key.toLowerCase() !== "s") return;
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.repeat) return;
-    if (event.shiftKey) {
-      void saveAsActive();
-    } else {
-      void saveActive();
-    }
-  }, true);
-
   document.addEventListener("keydown", (event) => {
     if (handleContextMenuKeydown(event)) return;
     if (event.key === "F2" && !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
@@ -1394,71 +1666,6 @@ function bindActions() {
       }
       closeMenus();
       $("commandPalette").classList.add("hidden");
-    }
-    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "o") {
-      event.preventDefault();
-      void openDocument();
-    }
-    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "o" && isMarkdownLikeDocument()) {
-      event.preventDefault();
-      openMarkdownOutline();
-    }
-    if (event.ctrlKey && event.key.toLowerCase() === "n") {
-      event.preventDefault();
-      newDocument();
-    }
-    if (event.ctrlKey && event.key.toLowerCase() === "w") {
-      event.preventDefault();
-      void closeDocument(activeDocument().id);
-    }
-    if (event.ctrlKey && event.key.toLowerCase() === "p") {
-      event.preventDefault();
-      openCommandPalette();
-    }
-    if (event.ctrlKey && event.key.toLowerCase() === "g") {
-      event.preventDefault();
-      goToLine();
-    }
-    if (event.ctrlKey && event.key === "Tab") {
-      event.preventDefault();
-      activateAdjacentDocument(event.shiftKey ? -1 : 1);
-      return;
-    }
-    if (event.ctrlKey && event.key === "PageDown") {
-      event.preventDefault();
-      activateAdjacentDocument(1);
-      return;
-    }
-    if (event.ctrlKey && event.key === "PageUp") {
-      event.preventDefault();
-      activateAdjacentDocument(-1);
-      return;
-    }
-    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "f") {
-      event.preventDefault();
-      void openWorkspaceFind("workspace-find");
-    }
-    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "h") {
-      event.preventDefault();
-      void openWorkspaceFind("workspace-replace");
-    }
-    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "f") {
-      event.preventDefault();
-      setFindView("find");
-      toggleFindOpen({ prefillFromSelection: true });
-    }
-    if (event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "h") {
-      event.preventDefault();
-      setFindView("replace");
-      toggleFindOpen({ prefillFromSelection: true });
-    }
-    if (event.key === "F3") {
-      event.preventDefault();
-      if (event.shiftKey) {
-        void findPreviousResult();
-      } else {
-        void findNextResult();
-      }
     }
   });
 
@@ -1714,9 +1921,11 @@ function closeSettingsPage() {
 }
 
 function selectSettingsSection(section: SettingsSection) {
-  if (!["appearance", "editor", "workspace", "system", "search", "about"].includes(section)) return;
+  if (!["appearance", "editor", "keybindings", "workspace", "system", "search", "about"].includes(section)) return;
   state.settingsSection = section;
   renderSettingsMenu();
+  $("settingsPage").querySelector<HTMLElement>(".settings-content")?.scrollTo({ top: 0 });
+  if (section === "keybindings") renderKeybindingSettings();
   if (section === "system") void refreshSystemIntegrationStatus();
 }
 
@@ -2234,6 +2443,7 @@ function activateDocument(id: number) {
   const doc = state.documents.find((item) => item.id === id);
   if (!doc) return;
   const previous = activeDocument();
+  if (previous && previous.id !== id) syncActiveBookmarkLines(previous);
   if (previous && previous.id !== id) syncMarkdownModelFromEditor(previous);
   if (previous && previous.id !== id && editor.getModel() === previous.model) {
     previous.viewState = editor.saveViewState() ?? undefined;
@@ -2394,6 +2604,31 @@ async function enterWorkspaceMode() {
   setWorkMode("workspace");
 }
 
+async function toggleExplorer() {
+  if (!state.workspace) {
+    await chooseWorkspace();
+    return;
+  }
+  state.mode = "workspace";
+  state.showDirectory = !state.showDirectory;
+  renderWorkspace();
+  renderChrome();
+  renderRightSidebar();
+  scheduleSessionSave();
+  if (state.showDirectory) focusExplorer();
+}
+
+function focusExplorer() {
+  if (!state.workspace) return;
+  state.mode = "workspace";
+  state.showDirectory = true;
+  renderWorkspace();
+  renderChrome();
+  const target = $("tree").querySelector<HTMLButtonElement>(".tree-item.active, .tree-item");
+  (target ?? $<HTMLButtonElement>("directoryToggle")).focus();
+  scheduleSessionSave();
+}
+
 async function chooseWorkspace() {
   const path = await invoke<string | null>("pick_workspace_path", {
     request: { defaultDir: preferredWorkspaceDialogDirectory() },
@@ -2477,6 +2712,7 @@ async function closeDocument(id: number): Promise<boolean> {
   if (index < 0) return false;
   const doc = state.documents[index];
   if (!(await confirmDocumentCanClose(doc, "关闭文档"))) return false;
+  rememberClosedDocument(doc);
   disposeMarkdownEditor(doc.id);
   state.documents.splice(index, 1);
   doc.model.dispose();
@@ -2484,6 +2720,52 @@ async function closeDocument(id: number): Promise<boolean> {
   activateDocument(state.documents[Math.max(0, index - 1)].id);
   scheduleSessionSave();
   return true;
+}
+
+function rememberClosedDocument(doc: OpenDocument) {
+  closedDocuments.unshift({
+    title: doc.title,
+    path: doc.path,
+    text: doc.model.getValue(),
+    encoding: doc.encoding,
+    lineEnding: doc.lineEnding,
+    fileSize: doc.fileSize,
+    readOnly: doc.readOnly,
+    readOnlyReason: doc.readOnlyReason,
+    language: doc.language,
+    largeFile: doc.largeFile,
+    draftId: doc.draftId,
+    dirty: doc.dirty,
+    savedText: doc.savedText,
+    origin: doc.origin,
+    viewState: doc.viewState,
+  });
+  if (closedDocuments.length > 20) closedDocuments.length = 20;
+}
+
+async function reopenClosedDocument() {
+  const snapshot = closedDocuments.shift();
+  if (!snapshot) {
+    log("没有可重新打开的标签");
+    return;
+  }
+  if (snapshot.path) {
+    const existing = state.documents.find((doc) => doc.path === snapshot.path);
+    if (existing) {
+      activateDocument(existing.id);
+      return;
+    }
+  }
+  const doc = createDocument(snapshot, {
+    draftId: snapshot.draftId,
+    dirty: snapshot.dirty,
+    savedText: snapshot.savedText,
+    origin: snapshot.origin,
+  });
+  doc.viewState = snapshot.viewState;
+  state.documents.push(doc);
+  activateDocument(doc.id);
+  log(`重新打开 ${doc.title}`);
 }
 
 async function confirmDocumentCanClose(doc: OpenDocument, title: string) {
@@ -2687,6 +2969,10 @@ async function closeTabFromMenu() {
 async function closeOtherTabsFromMenu() {
   const targetId = tabMenuDocumentId || state.activeId;
   closeMenus();
+  await closeOtherTabsFor(targetId);
+}
+
+async function closeOtherTabsFor(targetId: number) {
   if (state.documents.some((doc) => doc.id === targetId)) activateDocument(targetId);
   const ids = state.documents.filter((doc) => doc.id !== targetId).map((doc) => doc.id);
   for (const id of ids) {
@@ -2698,6 +2984,10 @@ async function closeOtherTabsFromMenu() {
 async function closeTabsToRightFromMenu() {
   const targetId = tabMenuDocumentId || state.activeId;
   closeMenus();
+  await closeTabsToRightFor(targetId);
+}
+
+async function closeTabsToRightFor(targetId: number) {
   const targetIndex = state.documents.findIndex((doc) => doc.id === targetId);
   if (targetIndex < 0) return;
   const ids = state.documents.slice(targetIndex + 1).map((doc) => doc.id);
@@ -3892,6 +4182,26 @@ function normalizeFontStack(value: unknown, fallback: string) {
   return trimmed || fallback;
 }
 
+function normalizeKeybindingOverrides(value: unknown): KeybindingOverrides {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const normalized: KeybindingOverrides = {};
+  for (const [commandId, binding] of Object.entries(value)) {
+    if (binding === null) normalized[commandId] = null;
+    else if (typeof binding === "string" && binding.trim()) normalized[commandId] = normalizeBinding(binding);
+  }
+  return normalized;
+}
+
+function normalizeBookmarkSnapshot(value: unknown): Record<string, number[]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).flatMap(([key, lines]) => {
+    if (!Array.isArray(lines)) return [];
+    const normalized = [...new Set(lines.filter((line): line is number => Number.isInteger(line) && line > 0))]
+      .sort((a, b) => a - b);
+    return normalized.length > 0 ? [[key, normalized]] : [];
+  }));
+}
+
 function isShellFontPreset(value: unknown): value is ShellFontPreset {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(SHELL_FONT_STACKS, value);
 }
@@ -3920,6 +4230,7 @@ function applyEditorPerformanceProfile(doc: OpenDocument) {
     folding: !large,
     links: !large,
     occurrencesHighlight: large ? "off" : "singleFile",
+    selectionHighlight: !large,
     renderLineHighlight: large ? "none" : "line",
     quickSuggestions: large ? false : { other: true, comments: false, strings: false },
     wordBasedSuggestions: large ? "off" : "currentDocument",
@@ -3947,6 +4258,7 @@ function renderAll() {
   renderHistoryLists();
   renderRecentFiles();
   renderRightSidebar();
+  renderBookmarkDecorations();
   requestEditorLayout();
 }
 
@@ -4016,6 +4328,15 @@ function renderChrome() {
       void closeDocument(item.id);
     });
     tab.addEventListener("click", () => activateDocument(item.id));
+    tab.addEventListener("mousedown", (event) => {
+      if (event.button === 1) event.preventDefault();
+    });
+    tab.addEventListener("auxclick", (event) => {
+      if (event.button !== 1) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void closeDocument(item.id);
+    });
     tab.addEventListener("contextmenu", (event) => openTabMenu(item.id, event));
     tab.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -4035,7 +4356,9 @@ function renderChrome() {
 
   $("statusBusy").innerHTML = state.busyMessage
     ? `<span class="busy-pill">${iconSvg("LoaderCircle")}${escapeHtml(state.busyMessage)}</span>`
-    : "";
+    : state.keybindingHint
+      ? `<span class="keybinding-hint">${escapeHtml(state.keybindingHint)}</span>`
+      : "";
   $("statusDocumentState").textContent = [doc.readOnly ? "只读" : "", doc.encodingStatus]
     .filter(Boolean)
     .join(" · ");
@@ -4045,6 +4368,99 @@ function renderChrome() {
     `${doc.model.getValueLength()} 字符`,
     `${formatBytes(doc.fileSize)}`,
   ].map((item) => `<span>${item}</span>`).join(`<span class="dot"></span>`);
+  renderShortcutHints();
+}
+
+function commandElementIds(): Record<string, string> {
+  return {
+  newButton: "file.new",
+  openButton: "file.open",
+  workspaceButton: "file.openFolder",
+  settingsButton: "view.openSettings",
+  saveButton: "file.save",
+  saveAsButton: "file.saveAs",
+  saveAllButton: "file.saveAll",
+  undoButton: "edit.undo",
+  redoButton: "edit.redo",
+  uppercaseButton: "edit.uppercase",
+  lowercaseButton: "edit.lowercase",
+  findButton: "search.find",
+  replaceButton: "search.replace",
+  goToLineButton: "navigation.goToLine",
+  commandButton: "navigation.commandPalette",
+  findRailButton: "search.workspaceFind",
+  menuNewButton: "file.new",
+  menuOpenButton: "file.open",
+  menuRecentButton: "file.openRecent",
+  menuWorkspaceButton: "file.openFolder",
+  menuCloseWorkspaceButton: "workspace.close",
+  menuSaveButton: "file.save",
+  menuSaveAsButton: "file.saveAs",
+  menuSaveAllButton: "file.saveAll",
+  menuCloseButton: "file.close",
+  menuUndoButton: "edit.undo",
+  menuRedoButton: "edit.redo",
+  menuUppercaseButton: "edit.uppercase",
+  menuLowercaseButton: "edit.lowercase",
+  menuSelectAllButton: "edit.selectAll",
+  menuFindButton: "search.find",
+  menuReplaceButton: "search.replace",
+  menuFindWorkspaceButton: "search.workspaceFind",
+  menuReplaceWorkspaceButton: "search.workspaceReplace",
+  menuGoToLineButton: "navigation.goToLine",
+  menuCommandButton: "navigation.commandPalette",
+  menuWordWrapButton: "view.toggleWordWrap",
+  menuOutlineButton: "markdown.outline",
+  tabSaveButton: "file.save",
+  tabSaveAsButton: "file.saveAs",
+  tabCloseButton: "file.close",
+  tabCloseOthersButton: "tabs.closeOthers",
+  tabCloseRightButton: "tabs.closeRight",
+  tabCloseSavedButton: "tabs.closeSaved",
+  };
+}
+
+function renderShortcutHints() {
+  for (const [elementId, commandId] of Object.entries(commandElementIds())) {
+    const element = document.getElementById(elementId) as HTMLButtonElement | null;
+    const item = appCommands.get(commandId);
+    if (!element || !item) continue;
+    const binding = activeCommandBindings(commandId)[0] ?? "";
+    const label = binding ? bindingLabel(binding) : "";
+    const small = element.querySelector("small");
+    if (small) small.textContent = label;
+    element.title = label ? `${item.title} ${label}` : item.title;
+    element.setAttribute("aria-label", element.title);
+    if (binding && !binding.includes(" ")) element.setAttribute("aria-keyshortcuts", ariaKeyShortcut(binding));
+    else element.removeAttribute("aria-keyshortcuts");
+  }
+  const markdownActions: Record<string, string> = {
+    "format:strong": "markdown.bold",
+    "format:em": "markdown.italic",
+    "format:inline_code": "markdown.inlineCode",
+    "format:link": "markdown.link",
+    "paragraph:heading 1": "markdown.heading1",
+    "paragraph:heading 2": "markdown.heading2",
+    "paragraph:heading 3": "markdown.heading3",
+    "paragraph:heading 4": "markdown.heading4",
+    "paragraph:heading 5": "markdown.heading5",
+    "paragraph:heading 6": "markdown.heading6",
+    "paragraph:paragraph": "markdown.paragraph",
+    "insert:image": "markdown.insertImage",
+    "insert:table": "markdown.insertTable",
+    "paragraph:pre": "markdown.codeBlock",
+    "paragraph:mathblock": "markdown.mathBlock",
+  };
+  document.querySelectorAll<HTMLButtonElement>("[data-markdown-action]").forEach((button) => {
+    const commandId = markdownActions[button.dataset.markdownAction ?? ""];
+    if (!commandId) return;
+    const binding = activeCommandBindings(commandId)[0] ?? "";
+    const label = binding ? bindingLabel(binding) : "";
+    const small = button.querySelector("small");
+    if (small) small.textContent = label;
+    const item = appCommands.get(commandId);
+    if (item) button.title = label ? `${item.title} ${label}` : item.title;
+  });
 }
 
 function renderWorkspace() {
@@ -4183,9 +4599,11 @@ function renderSettingsMenu() {
   setSegmentedValue("settingsWordWrapControl", state.wordWrap ? "on" : "off");
   setSegmentedValue("settingsMinimapControl", state.minimap ? "on" : "off");
   setSegmentedValue("settingsWhitespaceControl", state.renderWhitespace);
+  setSegmentedValue("settingsKeymapProfileControl", state.keymapProfile);
   setSegmentedValue("settingsMarkdownWidthControl", state.markdownContentWidth);
   setSegmentedValue("settingsMarkdownControl", state.markdownEditMode);
   setSegmentedValue("settingsModeControl", state.mode === "workspace" && state.workspace ? "workspace" : "single");
+  $("keymapProfileDetail").textContent = keymapProfileDetail();
   const integrationStatus = $("settingsShellIntegrationStatus");
   const integrationButton = $<HTMLButtonElement>("settingsShellIntegrationButton");
   $("settingsShellIntegrationDetail").textContent = state.shellIntegration.detail;
@@ -4212,6 +4630,7 @@ function renderSettingsMenu() {
     state.defaultAppCandidateLoaded,
     state.defaultAppCandidateBusy,
   );
+  if (state.settingsSection === "keybindings") renderKeybindingSettings();
 }
 
 function renderSystemIntegrationControl(
@@ -5094,7 +5513,68 @@ function attachEditorModel(doc: OpenDocument) {
   }
   applyEditorPerformanceProfile(doc);
   if (doc.viewState) editor.restoreViewState(doc.viewState);
+  renderBookmarkDecorations();
   requestEditorLayout();
+}
+
+function toggleBookmark() {
+  const doc = activeDocument();
+  const line = editor.getPosition()?.lineNumber;
+  if (!doc || !line) return;
+  const key = documentSessionKey(doc);
+  const lines = new Set(state.bookmarks[key] ?? []);
+  if (lines.has(line)) lines.delete(line);
+  else lines.add(line);
+  state.bookmarks[key] = [...lines].sort((a, b) => a - b);
+  if (state.bookmarks[key].length === 0) delete state.bookmarks[key];
+  renderBookmarkDecorations();
+  scheduleSessionSave();
+  log(lines.has(line) ? `已添加第 ${line} 行书签` : `已移除第 ${line} 行书签`);
+}
+
+function navigateBookmark(delta: number) {
+  const doc = activeDocument();
+  const lines = state.bookmarks[documentSessionKey(doc)] ?? [];
+  if (lines.length === 0) {
+    log("当前文档没有书签");
+    return;
+  }
+  const current = editor.getPosition()?.lineNumber ?? 1;
+  const ordered = delta > 0 ? lines : [...lines].reverse();
+  const target = ordered.find((line) => delta > 0 ? line > current : line < current) ?? ordered[0];
+  editor.setPosition({ lineNumber: target, column: 1 });
+  editor.revealLineInCenterIfOutsideViewport(target);
+  editor.focus();
+}
+
+function renderBookmarkDecorations() {
+  if (!bookmarkDecorations || !editor?.getModel()) return;
+  const doc = activeDocument();
+  const lineCount = doc.model.getLineCount();
+  const lines = (state.bookmarks[documentSessionKey(doc)] ?? []).filter((line) => line >= 1 && line <= lineCount);
+  bookmarkDecorations.set(lines.map((line) => ({
+    range: new monaco.Range(line, 1, line, 1),
+    options: {
+      isWholeLine: true,
+      linesDecorationsClassName: "notra-bookmark-glyph",
+      overviewRuler: {
+        color: state.darkMode ? "#858bff" : "#4f46e5",
+        position: monaco.editor.OverviewRulerLane.Left,
+      },
+    },
+  })));
+}
+
+function syncActiveBookmarkLines(doc = activeDocument()) {
+  if (!bookmarkDecorations || editor.getModel() !== doc.model) return;
+  const lines: number[] = [];
+  for (let index = 0; index < bookmarkDecorations.length; index += 1) {
+    const range = bookmarkDecorations.getRange(index);
+    if (range) lines.push(range.startLineNumber);
+  }
+  const key = documentSessionKey(doc);
+  if (lines.length > 0) state.bookmarks[key] = [...new Set(lines)].sort((a, b) => a - b);
+  else delete state.bookmarks[key];
 }
 
 function syncMarkdownPreviewScroll() {
@@ -5483,11 +5963,14 @@ function closeFontDropdowns() {
   });
 }
 
-function openCommandPalette() {
+function openCommandPalette(mode: "commands" | "files" = "commands") {
+  commandPaletteMode = mode;
   const palette = $("commandPalette");
   palette.classList.remove("hidden");
   const input = $("commandInput") as HTMLInputElement;
   input.value = "";
+  input.placeholder = mode === "files" ? "输入文件名或路径" : "输入命令";
+  input.setAttribute("aria-label", mode === "files" ? "快速打开文件" : "命令面板");
   commandActiveIndex = 0;
   renderCommandList("");
   input.focus();
@@ -5506,6 +5989,15 @@ function openCommandPalette() {
     const active = $("commandList").querySelector<HTMLButtonElement>(".command-row.active");
     active?.click();
   };
+}
+
+function openQuickOpen() {
+  openCommandPalette("files");
+}
+
+function openCurrentFind(view: "find" | "replace") {
+  setFindView(view);
+  toggleFindOpen({ prefillFromSelection: true });
 }
 
 function runEditorAction(actionId: string, successMessage?: string) {
@@ -5600,83 +6092,392 @@ async function goToLine() {
 }
 
 function renderCommandList(query: string) {
-  const commands = [
-    ["新建文件", newDocument],
-    ["打开文件", () => void openDocument()],
-    ["最近打开", () => toggleMenu("recentMenu")],
-    ["打开目录", () => void chooseWorkspace()],
-    ["关闭工作区", closeWorkspace],
-    ["单文件模式", () => setWorkMode("single")],
-    ["文件夹模式", () => void enterWorkspaceMode()],
-    ["保存", () => void saveActive()],
-    ["另存为", () => void saveAsActive()],
-    ["保存全部", () => void saveAll()],
-    ["切换到下一个标签", () => activateAdjacentDocument(1)],
-    ["切换到上一个标签", () => activateAdjacentDocument(-1)],
-    ["关闭当前标签", () => void closeDocument(activeDocument().id)],
-    ["关闭其他标签", () => {
-      tabMenuDocumentId = state.activeId;
-      void closeOtherTabsFromMenu();
-    }],
-    ["关闭右侧标签", () => {
-      tabMenuDocumentId = state.activeId;
-      void closeTabsToRightFromMenu();
-    }],
-    ["关闭已保存标签", () => void closeSavedTabs()],
-    ["查找", () => {
-      setFindView("find");
-      toggleFindOpen();
-    }],
-    ["查找下一个", () => void findNextResult()],
-    ["查找上一个", () => void findPreviousResult()],
-    ["当前文件中查找", () => findCurrent(true)],
-    ["清除查找结果", clearSearchResults],
-    ["Markdown 即时编辑", () => setMarkdownEditMode("wysiwyg")],
-    ["Markdown 分屏预览", () => setMarkdownEditMode("split")],
-    ["Markdown 源码", () => setMarkdownEditMode("source")],
-    ["全选", selectAllEditor],
-    ["复制", () => runEditorAction("editor.action.clipboardCopyAction")],
-    ["剪切", () => runEditorAction("editor.action.clipboardCutAction")],
-    ["粘贴", () => runEditorAction("editor.action.clipboardPasteAction")],
-    ["转为大写", transformToUppercase],
-    ["转为小写", transformToLowercase],
-    ["格式化文档", () => runEditorAction("editor.action.formatDocument", "已执行格式化命令")],
-    ["跳转到行", goToLine],
-    ["自动换行", toggleWordWrap],
-    ["显示缩略图", toggleMinimap],
-    ["显示空白符", cycleWhitespace],
-    ["切换主题", toggleTheme],
-  ] as const;
-  const fileCommands = state.workspace?.items
-    .filter((item) => !item.isDir)
-    .slice(0, 80)
-    .map((item) => [`打开 ${item.name}`, () => void openPath(item.path)] as const) ?? [];
-  const languageCommands = languageOptions().map(([id, label]) => [`语言 ${label}`, () => setLanguage(id)] as const);
-  const all = [...commands, ...languageCommands, ...fileCommands].filter(([name]) =>
-    name.toLowerCase().includes(query.trim().toLowerCase()),
-  );
-  commandActions = all.slice(0, 80).map(([, action]) => action);
+  type PaletteEntry = { title: string; detail: string; shortcut: string; action: () => void };
+  const normalizedQuery = query.trim().toLowerCase();
+  const all: PaletteEntry[] = commandPaletteMode === "files"
+    ? quickOpenEntries().filter((item) => `${item.title} ${item.detail}`.toLowerCase().includes(normalizedQuery))
+    : [...appCommands.values()]
+      .filter(commandVisibleInPalette)
+      .filter((item) => `${item.title} ${item.category} ${item.id}`.toLowerCase().includes(normalizedQuery))
+      .map((item) => ({
+        title: item.title,
+        detail: item.category,
+        shortcut: activeCommandBindings(item.id)[0] ?? "",
+        action: () => void executeAppCommand(item),
+      }));
+  const visible = all.slice(0, 160);
+  commandActions = visible.map((item) => item.action);
   commandActiveIndex = Math.min(commandActiveIndex, Math.max(0, commandActions.length - 1));
   $("commandList").innerHTML = "";
   if (all.length === 0) {
-    $("commandList").innerHTML = `<div class="empty compact">没有匹配命令</div>`;
+    $("commandList").innerHTML = `<div class="empty compact">${commandPaletteMode === "files" ? "没有匹配文件" : "没有匹配命令"}</div>`;
     return;
   }
-  all.slice(0, 80).forEach(([name, action], index) => {
+  visible.forEach((item, index) => {
     const button = document.createElement("button");
     button.className = `command-row ${index === commandActiveIndex ? "active" : ""}`;
     button.dataset.commandIndex = String(index);
-    button.textContent = name;
+    button.innerHTML = `<strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.detail)}</span>${item.shortcut ? `<kbd>${escapeHtml(bindingLabel(item.shortcut))}</kbd>` : ""}`;
     button.onpointerenter = () => {
       commandActiveIndex = index;
       renderCommandSelection();
     };
     button.onclick = () => {
       $("commandPalette").classList.add("hidden");
-      action();
+      item.action();
     };
     $("commandList").appendChild(button);
   });
+}
+
+function setKeymapProfile(value: string) {
+  if (!isKeymapProfile(value) || value === state.keymapProfile) return;
+  state.keymapProfile = value;
+  clearPendingKeybindingChord();
+  renderSettingsMenu();
+  renderShortcutHints();
+  scheduleSessionSave();
+  log(`键位方案已切换为 ${KEYMAP_PROFILE_LABELS[value]}`);
+}
+
+function keymapProfileDetail() {
+  if (state.keymapProfile === "adaptive") {
+    const resolved = resolveKeymapProfile(state.keymapProfile, state.mode);
+    return `当前${state.mode === "workspace" ? "工作区" : "单文件"}模式使用 ${KEYMAP_PROFILE_LABELS[resolved]} 键位`;
+  }
+  return `工作区和单文件统一使用 ${KEYMAP_PROFILE_LABELS[state.keymapProfile]} 键位`;
+}
+
+function renderKeybindingSettings() {
+  const list = $("keybindingList");
+  const query = ($<HTMLInputElement>("keybindingSearchInput").value ?? "").trim().toLowerCase();
+  const commands = [...appCommands.values()]
+    .filter((item) => {
+      const bindings = activeCommandBindings(item.id).join(" ");
+      return !query || `${item.title} ${item.category} ${item.id} ${bindings}`.toLowerCase().includes(query);
+    })
+    .sort((a, b) => a.category.localeCompare(b.category, "zh-CN") || a.title.localeCompare(b.title, "zh-CN"));
+  if (commands.length === 0) {
+    list.innerHTML = `<div class="empty compact">没有匹配的快捷键</div>`;
+    return;
+  }
+  const conflicts = keybindingConflictMap();
+  list.innerHTML = "";
+  for (const item of commands) {
+    const row = document.createElement("div");
+    row.className = "keybinding-row";
+    row.setAttribute("role", "listitem");
+    const bindings = activeCommandBindings(item.id);
+    const recording = recordingKeybindingCommandId === item.id;
+    const displayBindings = recording && recordingKeybindingStrokes.length > 0
+      ? [recordingKeybindingStrokes.join(" ")]
+      : bindings;
+    const conflict = bindings.some((binding) => (conflicts.get(binding)?.length ?? 0) > 1);
+    const custom = Object.prototype.hasOwnProperty.call(state.keybindingOverrides, item.id);
+    row.innerHTML = `
+      <div class="keybinding-command"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.category)} · ${escapeHtml(item.id)}</span></div>
+      <button class="keybinding-value ${recording ? "recording" : ""} ${conflict ? "conflict" : ""}" type="button" data-record-command="${escapeAttr(item.id)}" title="${conflict ? "存在快捷键冲突" : "点击重新录入"}">
+        ${recording && displayBindings.length === 0 ? `<span class="keybinding-empty">请按快捷键...</span>` : renderBindingKeys(displayBindings)}
+      </button>
+      <div class="keybinding-actions"><span class="keybinding-source">${custom ? "自定义" : KEYMAP_PROFILE_LABELS[resolveKeymapProfile(state.keymapProfile, state.mode)]}</span><button class="keybinding-reset" type="button" data-reset-command="${escapeAttr(item.id)}" aria-label="恢复 ${escapeAttr(item.title)} 默认快捷键" title="恢复默认" ${custom ? "" : "disabled"}>${iconSvg("Undo2")}</button></div>
+    `;
+    list.appendChild(row);
+  }
+  list.querySelectorAll<HTMLButtonElement>("[data-record-command]").forEach((button) => {
+    button.addEventListener("click", () => startKeybindingRecording(button.dataset.recordCommand ?? ""));
+  });
+  list.querySelectorAll<HTMLButtonElement>("[data-reset-command]").forEach((button) => {
+    button.addEventListener("click", () => resetKeybinding(button.dataset.resetCommand ?? ""));
+  });
+}
+
+function renderBindingKeys(bindings: string[]) {
+  if (bindings.length === 0) return `<span class="keybinding-empty">未绑定</span>`;
+  return bindings.map((binding) => binding
+    .split(" ")
+    .map((stroke) => `<kbd>${escapeHtml(bindingLabel(stroke))}</kbd>`)
+    .join(`<span class="keybinding-empty">然后</span>`))
+    .join(`<span class="keybinding-empty">或</span>`);
+}
+
+function keybindingConflictMap() {
+  const map = new globalThis.Map<string, string[]>();
+  for (const item of appCommands.values()) {
+    for (const binding of activeCommandBindings(item.id)) {
+      const ids = map.get(binding) ?? [];
+      const overlaps = ids.some((id) => (appCommands.get(id)?.priority ?? 0) === (item.priority ?? 0));
+      if (ids.length === 0 || overlaps) map.set(binding, [...ids, item.id]);
+      else map.set(binding, ids);
+    }
+  }
+  return map;
+}
+
+function startKeybindingRecording(commandId: string) {
+  if (!appCommands.has(commandId)) return;
+  window.clearTimeout(recordingKeybindingTimer);
+  recordingKeybindingCommandId = commandId;
+  recordingKeybindingStrokes = [];
+  renderKeybindingSettings();
+  listRecordingButton(commandId)?.focus();
+}
+
+function handleKeybindingRecorder(event: KeyboardEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.key === "Escape") {
+    cancelKeybindingRecording();
+    return;
+  }
+  if (event.key === "Delete" || event.key === "Backspace") {
+    state.keybindingOverrides[recordingKeybindingCommandId] = null;
+    finishKeybindingRecordingState();
+    renderSettingsMenu();
+    renderShortcutHints();
+    scheduleSessionSave();
+    return;
+  }
+  const stroke = keyboardEventStroke(event);
+  if (!stroke || stroke === "Enter") return;
+  recordingKeybindingStrokes.push(stroke);
+  renderKeybindingSettings();
+  listRecordingButton(recordingKeybindingCommandId)?.focus();
+  window.clearTimeout(recordingKeybindingTimer);
+  if (recordingKeybindingStrokes.length >= 2) {
+    void commitRecordedKeybinding();
+  } else {
+    recordingKeybindingTimer = window.setTimeout(() => void commitRecordedKeybinding(), 900);
+  }
+}
+
+async function commitRecordedKeybinding() {
+  const commandId = recordingKeybindingCommandId;
+  const binding = normalizeBinding(recordingKeybindingStrokes.join(" "));
+  if (!commandId || !binding) return;
+  const conflicts = [...appCommands.values()].filter((item) =>
+    item.id !== commandId && activeCommandBindings(item.id).includes(binding),
+  );
+  if (conflicts.length > 0) {
+    const confirmed = await askConfirm({
+      title: "快捷键冲突",
+      subtitle: bindingLabel(binding),
+      body: `该按键已用于：${conflicts.map((item) => item.title).join("、")}。继续后将移除这些命令的同键绑定。`,
+      okLabel: "继续绑定",
+      cancelLabel: "取消",
+    });
+    if (!confirmed) {
+      cancelKeybindingRecording();
+      return;
+    }
+    conflicts.forEach((item) => { state.keybindingOverrides[item.id] = null; });
+  }
+  state.keybindingOverrides[commandId] = binding;
+  finishKeybindingRecordingState();
+  renderSettingsMenu();
+  renderShortcutHints();
+  scheduleSessionSave();
+}
+
+function cancelKeybindingRecording() {
+  finishKeybindingRecordingState();
+  renderKeybindingSettings();
+}
+
+function finishKeybindingRecordingState() {
+  window.clearTimeout(recordingKeybindingTimer);
+  recordingKeybindingCommandId = "";
+  recordingKeybindingStrokes = [];
+}
+
+function listRecordingButton(commandId: string) {
+  return $("keybindingList").querySelector<HTMLButtonElement>(`[data-record-command="${CSS.escape(commandId)}"]`);
+}
+
+function resetKeybinding(commandId: string) {
+  if (!Object.prototype.hasOwnProperty.call(state.keybindingOverrides, commandId)) return;
+  delete state.keybindingOverrides[commandId];
+  renderSettingsMenu();
+  renderShortcutHints();
+  scheduleSessionSave();
+}
+
+async function resetAllKeybindings() {
+  if (Object.keys(state.keybindingOverrides).length === 0) return;
+  const confirmed = await askConfirm({
+    title: "恢复默认快捷键",
+    subtitle: KEYMAP_PROFILE_LABELS[state.keymapProfile],
+    body: "所有自定义快捷键将恢复为当前键位方案的默认值。",
+    okLabel: "恢复默认",
+    cancelLabel: "取消",
+  });
+  if (!confirmed) return;
+  state.keybindingOverrides = {};
+  renderSettingsMenu();
+  renderShortcutHints();
+  scheduleSessionSave();
+}
+
+async function exportKeybindings() {
+  const path = await invoke<string | null>("pick_save_path", {
+    request: { defaultDir: preferredDialogDirectory(), fileName: "notra-keybindings.json" },
+  });
+  if (!path) return;
+  const text = JSON.stringify({
+    version: 1,
+    profile: state.keymapProfile,
+    overrides: state.keybindingOverrides,
+  }, null, 2);
+  await invoke("save_document", {
+    request: { path, text, encoding: "UTF-8", lineEnding: "LF" },
+  });
+  log(`快捷键已导出 ${path}`);
+}
+
+async function importKeybindings() {
+  const path = await invoke<string | null>("pick_file_path", {
+    request: { defaultDir: preferredDialogDirectory() },
+  });
+  if (!path) return;
+  try {
+    const dto = await invoke<DocumentDto>("open_path", { path });
+    const parsed = JSON.parse(dto.text) as { profile?: unknown; overrides?: unknown };
+    const profile = isKeymapProfile(parsed.profile) ? parsed.profile : state.keymapProfile;
+    const overrides = normalizeKeybindingOverrides(parsed.overrides);
+    const unknown = Object.keys(overrides).filter((commandId) => !appCommands.has(commandId));
+    if (unknown.length > 0) throw new Error(`包含未知命令：${unknown.slice(0, 4).join("、")}`);
+    state.keymapProfile = profile;
+    state.keybindingOverrides = overrides;
+    renderSettingsMenu();
+    renderShortcutHints();
+    scheduleSessionSave();
+    log(`快捷键已导入 ${path}`);
+  } catch (error) {
+    log(`快捷键导入失败：${String(error)}`);
+  }
+}
+
+async function pastePlainText() {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    await markdownEditor.pasteAsPlainText();
+    return;
+  }
+  try {
+    const text = await navigator.clipboard.readText();
+    const selections = editor.getSelections() ?? [];
+    editor.executeEdits("paste-plain", selections.map((range) => ({ range, text, forceMoveMarkers: true })));
+    editor.focus();
+  } catch (error) {
+    log(`粘贴纯文本失败：${String(error)}`);
+  }
+}
+
+async function runMarkdownShortcutAction(action: string) {
+  if (isMarkdownWysiwygActive() && markdownEditor) {
+    await runMarkdownContextAction(action);
+    return;
+  }
+  if (!isMarkdownLikeDocument()) return;
+  if (action.startsWith("format:")) {
+    applyMarkdownInlineFormat(action.slice("format:".length));
+    return;
+  }
+  if (action.startsWith("paragraph:")) {
+    applyMarkdownParagraphFormat(action.slice("paragraph:".length));
+    return;
+  }
+  if (action === "insert:image") {
+    const path = await pickMarkdownImagePath();
+    if (path) insertMarkdownSnippet(`![图片](${path})`);
+    return;
+  }
+  if (action === "insert:table") {
+    insertMarkdownSnippet("| 列 1 | 列 2 |\n| --- | --- |\n|     |     |");
+  }
+}
+
+function applyMarkdownInlineFormat(format: string) {
+  const markers: Record<string, readonly [string, string]> = {
+    strong: ["**", "**"],
+    em: ["*", "*"],
+    inline_code: ["`", "`"],
+    link: ["[", "](url)"],
+  };
+  const marker = markers[format];
+  if (!marker) return;
+  const model = editor.getModel();
+  const selections = editor.getSelections() ?? [];
+  if (!model || selections.length === 0) return;
+  editor.executeEdits("markdown-format", selections.map((range) => ({
+    range,
+    text: `${marker[0]}${model.getValueInRange(range)}${marker[1]}`,
+    forceMoveMarkers: true,
+  })));
+  editor.focus();
+}
+
+function applyMarkdownParagraphFormat(format: string) {
+  const model = editor.getModel();
+  const selections = editor.getSelections() ?? [];
+  if (!model || selections.length === 0) return;
+  if (format === "pre" || format === "mathblock") {
+    const fence = format === "pre" ? "```" : "$$";
+    editor.executeEdits("markdown-block", selections.map((range) => ({
+      range,
+      text: `${fence}\n${model.getValueInRange(range)}\n${fence}`,
+      forceMoveMarkers: true,
+    })));
+    editor.focus();
+    return;
+  }
+  const heading = format.match(/^heading ([1-6])$/)?.[1];
+  const lines = new Set<number>();
+  selections.forEach((range) => {
+    for (let line = range.startLineNumber; line <= range.endLineNumber; line += 1) lines.add(line);
+  });
+  editor.executeEdits("markdown-paragraph", [...lines].map((lineNumber) => {
+    const range = new monaco.Range(lineNumber, 1, lineNumber, model.getLineMaxColumn(lineNumber));
+    const content = model.getLineContent(lineNumber).replace(/^\s{0,3}#{1,6}\s+/, "");
+    return { range, text: heading ? `${"#".repeat(Number(heading))} ${content}` : content };
+  }));
+  editor.focus();
+}
+
+function insertMarkdownSnippet(text: string) {
+  const selections = editor.getSelections() ?? [];
+  editor.executeEdits("markdown-insert", selections.map((range) => ({ range, text, forceMoveMarkers: true })));
+  editor.focus();
+}
+
+function commandVisibleInPalette(item: AppCommand) {
+  if (!(item.enabled?.() ?? true)) return false;
+  if (item.id.startsWith("markdown.")) return isMarkdownLikeDocument();
+  return true;
+}
+
+function quickOpenEntries() {
+  const entries: Array<{ title: string; detail: string; shortcut: string; action: () => void }> = [];
+  const seen = new Set<string>();
+  for (const doc of state.documents) {
+    const key = doc.path ?? `document:${doc.id}`;
+    seen.add(key.toLowerCase());
+    entries.push({
+      title: doc.title,
+      detail: doc.path ?? "已打开的临时文件",
+      shortcut: "",
+      action: () => activateDocument(doc.id),
+    });
+  }
+  for (const item of state.workspace?.items ?? []) {
+    if (item.isDir || seen.has(item.path.toLowerCase())) continue;
+    seen.add(item.path.toLowerCase());
+    entries.push({ title: item.name, detail: item.path, shortcut: "", action: () => void openPath(item.path) });
+  }
+  for (const path of state.recentFiles) {
+    if (seen.has(path.toLowerCase())) continue;
+    seen.add(path.toLowerCase());
+    entries.push({ title: fileNameFromPath(path), detail: path, shortcut: "", action: () => void openPath(path, true) });
+  }
+  return entries;
 }
 
 function moveCommandSelection(delta: number) {
@@ -5746,6 +6547,9 @@ async function restoreSession() {
     state.editorFontMode = normalizeFontMode(snapshot.editorFontMode, state.editorFontMode);
     state.editorFontPreset = isEditorFontPreset(snapshot.editorFontPreset) ? snapshot.editorFontPreset : state.editorFontPreset;
     state.editorFontCustom = normalizeFontStack(snapshot.editorFontCustom, state.editorFontCustom);
+    state.keymapProfile = isKeymapProfile(snapshot.keymapProfile) ? snapshot.keymapProfile : "vscode";
+    state.keybindingOverrides = normalizeKeybindingOverrides(snapshot.keybindingOverrides);
+    state.bookmarks = normalizeBookmarkSnapshot(snapshot.bookmarks);
     applyShellFontSettings();
     applyEditorSettings();
     applyMarkdownContentWidth();
@@ -5975,10 +6779,11 @@ async function saveSession() {
   if (state.restoring) return;
   const activeBeforeSave = activeDocument();
   if (activeBeforeSave) syncMarkdownModelFromEditor(activeBeforeSave);
+  if (activeBeforeSave) syncActiveBookmarkLines(activeBeforeSave);
   if (activeBeforeSave) activeBeforeSave.viewState = editor.saveViewState() ?? undefined;
   const active = activeDocument();
   const snapshot: SessionSnapshot = {
-    version: 6,
+    version: 7,
     openFiles: uniquePaths(state.documents.flatMap((doc) => (doc.path ? [doc.path] : []))),
     draftDocuments: draftDocumentSnapshots(),
     documentOrigins: Object.fromEntries(
@@ -6020,6 +6825,9 @@ async function saveSession() {
     editorFontMode: state.editorFontMode,
     editorFontPreset: state.editorFontPreset,
     editorFontCustom: state.editorFontCustom,
+    keymapProfile: state.keymapProfile,
+    keybindingOverrides: state.keybindingOverrides,
+    bookmarks: state.bookmarks,
     matchCase: ($("matchCaseInput") as HTMLInputElement).checked,
     wholeWord: ($("wholeWordInput") as HTMLInputElement).checked,
     reverseSearch: ($("reverseSearchInput") as HTMLInputElement).checked,
@@ -6163,8 +6971,17 @@ function defineThemes() {
       "editorLineNumber.activeForeground": "#3238d8",
       "editorCursor.foreground": "#3238d8",
       "editor.selectionBackground": "#dfe4ff",
-      "editor.lineHighlightBackground": "#eef1ff80",
-      "editorIndentGuide.background1": "#e4ebf4",
+      "editor.inactiveSelectionBackground": "#e8edf5",
+      "editor.selectionHighlightBackground": "#add6ff66",
+      "editor.wordHighlightBackground": "#d9e4f280",
+      "editor.wordHighlightStrongBackground": "#c8dcf099",
+      "editor.wordHighlightTextBackground": "#d9e4f280",
+      "editor.wordHighlightBorder": "#00000000",
+      "editor.wordHighlightStrongBorder": "#00000000",
+      "editor.lineHighlightBackground": "#f5f7fa",
+      "editor.lineHighlightBorder": "#00000000",
+      "editorIndentGuide.background1": "#dfe4ec",
+      "editorIndentGuide.activeBackground1": "#aeb8c7",
     },
   });
   monaco.editor.defineTheme("notra-dark", {
@@ -6194,7 +7011,17 @@ function defineThemes() {
       "editorLineNumber.activeForeground": "#858bff",
       "editorCursor.foreground": "#858bff",
       "editor.selectionBackground": "#313766",
-      "editor.lineHighlightBackground": "#252b5480",
+      "editor.inactiveSelectionBackground": "#2a3140",
+      "editor.selectionHighlightBackground": "#264f7866",
+      "editor.wordHighlightBackground": "#3a425580",
+      "editor.wordHighlightStrongBackground": "#46546b99",
+      "editor.wordHighlightTextBackground": "#3a425580",
+      "editor.wordHighlightBorder": "#00000000",
+      "editor.wordHighlightStrongBorder": "#00000000",
+      "editor.lineHighlightBackground": "#1c2330",
+      "editor.lineHighlightBorder": "#00000000",
+      "editorIndentGuide.background1": "#2c3442",
+      "editorIndentGuide.activeBackground1": "#596579",
     },
   });
 }

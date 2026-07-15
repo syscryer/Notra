@@ -295,6 +295,10 @@
               <span class="icon-slot" data-icon="Type"></span>
               <strong>编辑器</strong>
             </button>
+            <button class="settings-nav-item" data-settings-section="keybindings">
+              <span class="icon-slot" data-icon="Command"></span>
+              <strong>快捷键</strong>
+            </button>
             <button class="settings-nav-item" data-settings-section="workspace">
               <span class="icon-slot" data-icon="FolderTree"></span>
               <strong>工作区</strong>
@@ -507,6 +511,42 @@
                 </div>
               </div>
             </div>
+          </section>
+
+          <section class="settings-panel" data-settings-panel="keybindings">
+            <header class="settings-section-head">
+              <strong>键盘快捷方式</strong>
+              <span>选择熟悉的键位，也可以单独覆盖任意命令</span>
+            </header>
+            <div class="settings-list keymap-profile-list">
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Command"></span>
+                <div>
+                  <strong>键位方案</strong>
+                  <span id="keymapProfileDetail">工作区和单文件统一使用 VS Code 键位</span>
+                </div>
+                <div class="seg-control wide keymap-profile-control" id="settingsKeymapProfileControl">
+                  <button data-value="vscode">VS Code</button>
+                  <button data-value="notepad-plus-plus">Notepad++</button>
+                  <button data-value="adaptive">跟随模式</button>
+                </div>
+              </div>
+            </div>
+
+            <header class="settings-section-head compact keybinding-section-head">
+              <strong>命令</strong>
+              <span>点击按键可重新录入；Delete 清空，Esc 取消</span>
+            </header>
+            <div class="keybinding-toolbar">
+              <label class="keybinding-search">
+                <span class="icon-slot" data-icon="Search"></span>
+                <input id="keybindingSearchInput" type="search" placeholder="搜索命令、分类或按键" autocomplete="off" />
+              </label>
+              <button class="settings-action" id="importKeybindingsButton"><span class="icon-slot" data-icon="ClipboardPaste"></span><span>导入</span></button>
+              <button class="settings-action" id="exportKeybindingsButton"><span class="icon-slot" data-icon="ClipboardCopy"></span><span>导出</span></button>
+              <button class="settings-action" id="resetAllKeybindingsButton">全部恢复默认</button>
+            </div>
+            <div class="keybinding-list" id="keybindingList" role="list"></div>
           </section>
 
           <section class="settings-panel" data-settings-panel="workspace">
