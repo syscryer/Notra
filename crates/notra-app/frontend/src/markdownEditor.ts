@@ -627,6 +627,7 @@ export class MarkdownEditorBridge {
     if (typeof options.highlightIndex === "number") searchOptions.highlightIndex = options.highlightIndex;
     const result = this.muya.search(value, searchOptions);
     if (options.selectionOnly) this.filterSearchToSelection(result, options.highlightIndex);
+    this.revealActiveSearchMatch();
     return { total: result.matches.length, index: result.index };
   }
 
@@ -680,7 +681,17 @@ export class MarkdownEditorBridge {
 
   find(direction: "previous" | "next"): MarkdownSearchState {
     const result = this.muya.find(direction);
+    this.revealActiveSearchMatch();
     return { total: result.matches.length, index: result.index };
+  }
+
+  private revealActiveSearchMatch() {
+    window.requestAnimationFrame(() => {
+      this.root.querySelector<HTMLElement>(".mu-highlight")?.scrollIntoView({
+        block: "center",
+        inline: "nearest",
+      });
+    });
   }
 
   replace(replacement: string, replaceAll: boolean, regex: boolean): MarkdownSearchState {

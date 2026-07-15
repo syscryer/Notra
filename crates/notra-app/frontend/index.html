@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="/icon.png" />
     <title>Notra</title>
     <style>
       html,
@@ -41,13 +42,9 @@
       .boot-mark {
         width: 34px;
         height: 34px;
-        border-radius: 9px;
-        display: grid;
-        place-items: center;
-        color: #ffffff;
-        background: #3238d8;
-        font-size: 18px;
-        font-weight: 800;
+        border-radius: 8px;
+        display: block;
+        object-fit: contain;
       }
 
       body:not(.booting) .boot-splash {
@@ -58,14 +55,14 @@
   <body class="booting">
     <div class="boot-splash" id="bootSplash" aria-hidden="true">
       <div class="boot-card">
-        <div class="boot-mark">N</div>
+        <img class="boot-mark" src="/icon.png" alt="" />
         <div>正在启动 Notra</div>
       </div>
     </div>
     <main id="app">
       <header class="titlebar" id="windowTitlebar">
         <section class="brand">
-          <div class="brand-mark">N</div>
+          <img class="brand-mark" src="/icon.png" alt="" />
           <strong>Notra</strong>
         </section>
         <nav class="app-menu-bar" aria-label="应用菜单">
@@ -211,11 +208,16 @@
           <div class="explorer-body" id="tree"></div>
         </aside>
 
-        <section class="editor-area">
+        <section class="editor-area" id="editorArea">
           <div class="editor-wrap">
             <div class="current-find-dock hidden" id="currentFindDock">
               <div class="current-find-bar">
-                <input id="currentFindInput" list="findHistoryList" aria-label="查找目标" placeholder="查找" />
+                <div class="current-find-query">
+                  <input id="currentFindInput" autocomplete="off" aria-label="查找目标" aria-controls="currentFindHistoryMenu" aria-expanded="false" placeholder="查找" />
+                  <button class="current-find-history-toggle" id="currentFindHistoryButton" type="button" aria-label="搜索历史" aria-controls="currentFindHistoryMenu" aria-expanded="false" title="搜索历史">
+                    <span class="icon-slot" data-icon="ChevronDown"></span>
+                  </button>
+                </div>
                 <input class="hidden" id="currentReplaceInput" list="replaceHistoryDataList" aria-label="替换为" placeholder="替换为" />
                 <div class="current-find-options">
                   <label title="匹配大小写"><input type="checkbox" id="currentMatchCaseInput" /><span>Aa</span></label>
@@ -232,10 +234,12 @@
                   <button id="closeCurrentFindButton" aria-label="关闭当前文件查找" title="关闭当前文件查找"><span class="icon-slot" data-icon="X"></span></button>
                 </div>
               </div>
+              <div class="current-find-history-menu hidden" id="currentFindHistoryMenu" role="listbox" aria-label="搜索历史"></div>
             </div>
             <div id="editor"></div>
             <div id="markdownWysiwyg" class="markdown-wysiwyg" aria-label="Markdown 即时编辑器" aria-hidden="true"></div>
           </div>
+          <div class="markdown-preview-resize hidden" id="markdownPreviewResize" role="separator" aria-label="调整 Markdown 预览宽度" aria-orientation="vertical" aria-valuemin="280" tabindex="0" title="拖动调整预览宽度，双击恢复默认"></div>
           <aside class="markdown-preview hidden" id="markdownPreview"></aside>
         </section>
       </section>
@@ -317,7 +321,7 @@
             </button>
           </nav>
           <footer class="settings-product">
-            <div class="settings-product-mark">N</div>
+            <img class="settings-product-mark" src="/icon.png" alt="" />
             <div>
               <strong>Notra</strong>
               <span>v0.1.0</span>
@@ -650,7 +654,7 @@
               <span>当前应用和编辑内核</span>
             </header>
             <div class="about-block">
-              <div class="about-mark">N</div>
+              <img class="about-mark" src="/icon.png" alt="" />
               <div>
                 <strong>Notra</strong>
                 <span>Tauri + Monaco + Muya editor</span>

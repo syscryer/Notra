@@ -113,6 +113,7 @@ import cssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import "monaco-editor/esm/vs/basic-languages/monaco.contribution";
+import "monaco-editor/esm/vs/editor/contrib/linesOperations/browser/linesOperations";
 import "monaco-editor/esm/vs/language/json/monaco.contribution";
 import "./styles.css";
 
@@ -266,6 +267,7 @@ interface SessionSnapshot {
   rightSidebarOpen: boolean;
   rightTool: RightTool;
   rightSidebarWidth: number;
+  markdownPreviewWidth?: number;
   treeScrollTop: number;
   markdownEditMode: MarkdownEditMode;
   markdownContentWidth: MarkdownContentWidth;
@@ -755,6 +757,7 @@ const state = {
   defaultAppCandidateBusy: false,
   rightTool: "search" as RightTool,
   rightSidebarWidth: 420,
+  markdownPreviewWidth: 0,
   busyMessage: "",
   keybindingHint: "",
   restoring: false,
@@ -786,13 +789,16 @@ let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
 let editorBusyDepth = 0;
 let openRequestTask: Promise<void> = Promise.resolve();
+let fileDropTask: Promise<void> = Promise.resolve();
 let openRequestsReady = false;
 let titlebarMaximizeToggleAt = 0;
 let rightSidebarResizeState: { pointerId: number } | null = null;
+let markdownPreviewResizeState: { pointerId: number } | null = null;
 let markdownPreviewTimer = 0;
 let markdownPreviewRenderVersion = 0;
 let markdownModelSyncTimer = 0;
 let currentFindTimer = 0;
+let currentFindHistoryActiveIndex = -1;
 let markdownEditor: MarkdownEditorBridge | null = null;
 let markdownModulePromise: Promise<typeof import("./markdownEditor")> | null = null;
 let markdownEditorDocumentId = 0;
@@ -1136,10 +1142,12 @@ function bootstrap() {
   registerAppCommands();
   bindKeybindings();
 
-bindActions();
+  bindActions();
+  bindFileDrop();
   bindWindowControls();
   bindWindowCloseGuard();
   bindRightSidebarResize();
+  bindMarkdownPreviewResize();
   bindOutsideDismissal();
   setFindView("find", false);
   renderAll();
@@ -1164,6 +1172,62 @@ function markAppReady() {
       $("bootSplash")?.remove();
     });
   });
+}
+
+function bindFileDrop() {
+  void appWindow.onDragDropEvent(({ payload }) => {
+    if (payload.type === "leave") {
+      setFileDropActive(false);
+      return;
+    }
+
+    const insideEditor = isDropPositionInsideEditor(payload.position);
+    if (payload.type === "enter" || payload.type === "over") {
+      setFileDropActive(insideEditor);
+      return;
+    }
+
+    setFileDropActive(false);
+    if (!insideEditor || payload.paths.length === 0) return;
+    fileDropTask = fileDropTask
+      .then(() => openDroppedFiles(payload.paths))
+      .catch((error) => log(`拖放打开失败：${String(error)}`));
+  }).catch((error) => log(`初始化文件拖放失败：${String(error)}`));
+}
+
+function isDropPositionInsideEditor(position: { x: number; y: number }) {
+  const rect = $<HTMLElement>("editorArea").getBoundingClientRect();
+  const scale = window.devicePixelRatio || 1;
+  const x = position.x / scale;
+  const y = position.y / scale;
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+}
+
+function setFileDropActive(active: boolean) {
+  $("editorArea").classList.toggle("file-drop-active", active);
+}
+
+async function openDroppedFiles(paths: string[]) {
+  const seen = new Set<string>();
+  const uniquePaths = paths.filter((path) => {
+    const key = normalizePathForCompare(path);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  let opened = 0;
+  let failed = 0;
+  for (const path of uniquePaths) {
+    try {
+      await openPath(path, true);
+      opened += 1;
+    } catch (error) {
+      failed += 1;
+      log(`拖放打开失败：${fileNameFromPath(path)}：${String(error)}`);
+    }
+  }
+  if (opened > 0) focusActiveEditor();
+  log(`拖放打开 ${opened} 个文件${failed > 0 ? `，${failed} 个失败` : ""}`);
 }
 
 function registerAppCommands() {
@@ -1227,13 +1291,13 @@ function registerAppCommands() {
     editorCommand("editor.trimTrailingWhitespace", "删除行尾空白", "editor.action.trimTrailingWhitespace", editorOnly),
     editorCommand("editor.sortLinesAscending", "按升序排列行", "editor.action.sortLinesAscending", editorOnly),
     editorCommand("editor.sortLinesDescending", "按降序排列行", "editor.action.sortLinesDescending", editorOnly),
-    command("search.find", "查找", "查找", () => openCurrentFind("find"), { when: () => isEditorSurfaceFocused() }),
-    command("search.replace", "替换", "查找", () => openCurrentFind("replace"), { when: () => isEditorSurfaceFocused() }),
-    command("search.next", "查找下一个", "查找", () => findNextResult(), { when: () => isEditorSurfaceFocused() }),
-    command("search.previous", "查找上一个", "查找", () => findPreviousResult(), { when: () => isEditorSurfaceFocused() }),
-    command("search.workspaceFind", "在文件中查找", "查找", () => openWorkspaceFind("workspace-find"), { enabled: () => Boolean(state.workspace) }),
-    command("search.workspaceReplace", "在文件中替换", "查找", () => openWorkspaceFind("workspace-replace"), { enabled: () => Boolean(state.workspace) }),
-    command("search.findAllCurrent", "查找当前文件全部结果", "查找", () => findCurrent(true), { when: () => isEditorSurfaceFocused() }),
+    command("search.find", "查找", "查找", () => openCurrentFind("find"), { allowInInput: true, when: () => isEditorSurfaceFocused() }),
+    command("search.replace", "替换", "查找", () => openCurrentFind("replace"), { allowInInput: true, when: () => isEditorSurfaceFocused() }),
+    command("search.next", "查找下一个", "查找", () => findNextResult(), { allowInInput: true, when: () => isEditorSurfaceFocused() }),
+    command("search.previous", "查找上一个", "查找", () => findPreviousResult(), { allowInInput: true, when: () => isEditorSurfaceFocused() }),
+    command("search.workspaceFind", "在文件中查找", "查找", () => openWorkspaceFind("workspace-find"), { allowInInput: true, enabled: () => Boolean(state.workspace) }),
+    command("search.workspaceReplace", "在文件中替换", "查找", () => openWorkspaceFind("workspace-replace"), { allowInInput: true, enabled: () => Boolean(state.workspace) }),
+    command("search.findAllCurrent", "查找当前文件全部结果", "查找", () => findCurrent(true), { allowInInput: true, when: () => isEditorSurfaceFocused() }),
     command("search.clearResults", "清除查找结果", "查找", clearSearchResults),
     command("navigation.goToLine", "跳转到行", "导航", goToLine, { when: () => isEditorSurfaceFocused() }),
     command("navigation.quickOpen", "快速打开文件", "导航", openQuickOpen, { allowInInput: true }),
@@ -1375,12 +1439,12 @@ function clearPendingKeybindingChord() {
 }
 
 function isEditableShortcutTarget(target: EventTarget | null) {
-  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']"));
 }
 
 function isEditorSurfaceFocused() {
   const active = document.activeElement;
-  return active instanceof HTMLElement && Boolean(active.closest("#editor, #markdownWysiwygHost, #markdownPreview"));
+  return active instanceof HTMLElement && Boolean(active.closest("#editor, #markdownWysiwyg, #markdownPreview"));
 }
 
 function bindActions() {
@@ -1409,6 +1473,15 @@ function bindActions() {
   $("redoButton").addEventListener("click", redoEditor);
   $("uppercaseButton").addEventListener("click", transformToUppercase);
   $("lowercaseButton").addEventListener("click", transformToLowercase);
+  $("tabs").addEventListener("mousedown", (event) => {
+    if (event.button === 0 && event.target === event.currentTarget) event.preventDefault();
+  });
+  $("tabs").addEventListener("dblclick", (event) => {
+    if (event.button !== 0 || event.target !== event.currentTarget) return;
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    newDocument();
+  });
   $("findButton").addEventListener("click", () => {
     setFindView("find");
     toggleFindOpen({ prefillFromSelection: true });
@@ -1432,12 +1505,18 @@ function bindActions() {
   $("findWorkspaceButton").addEventListener("click", () => void searchWorkspace());
   $("previewWorkspaceReplaceButton").addEventListener("click", () => void previewWorkspaceReplace());
   $("closeCurrentFindButton").addEventListener("click", closeFind);
+  $("currentFindHistoryButton").addEventListener("click", () => {
+    toggleCurrentFindHistory();
+    ($("currentFindInput") as HTMLInputElement).focus();
+  });
   $("currentFindPreviousButton").addEventListener("click", () => {
     syncCurrentFindControls();
+    commitSearchHistory();
     void findPreviousResult();
   });
   $("currentFindNextButton").addEventListener("click", () => {
     syncCurrentFindControls();
+    commitSearchHistory();
     void findNextResult();
   });
   $("currentFindAllButton").addEventListener("click", () => {
@@ -1458,10 +1537,35 @@ function bindActions() {
     $(id).addEventListener("change", scheduleCurrentFind);
   });
   $("currentFindInput").addEventListener("keydown", (event) => {
-    if ((event as KeyboardEvent).key !== "Enter") return;
+    const keyboardEvent = event as KeyboardEvent;
+    if (keyboardEvent.altKey && keyboardEvent.key === "ArrowDown") {
+      event.preventDefault();
+      openCurrentFindHistory();
+      moveCurrentFindHistorySelection(1);
+      return;
+    }
+    if (!$("currentFindHistoryMenu").classList.contains("hidden")) {
+      if (keyboardEvent.key === "ArrowDown" || keyboardEvent.key === "ArrowUp") {
+        event.preventDefault();
+        moveCurrentFindHistorySelection(keyboardEvent.key === "ArrowDown" ? 1 : -1);
+        return;
+      }
+      if (keyboardEvent.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeCurrentFindHistory();
+        return;
+      }
+      if (keyboardEvent.key === "Enter" && selectActiveCurrentFindHistory()) {
+        event.preventDefault();
+        return;
+      }
+    }
+    if (keyboardEvent.key !== "Enter") return;
     event.preventDefault();
     syncCurrentFindControls();
-    if ((event as KeyboardEvent).shiftKey) void findPreviousResult();
+    commitSearchHistory();
+    if (keyboardEvent.shiftKey) void findPreviousResult();
     else void findNextResult();
   });
   $("rightSearchToolButton").addEventListener("click", () => {
@@ -2274,6 +2378,9 @@ function bindOutsideDismissal() {
   document.addEventListener("pointerdown", (event) => {
     const target = event.target as HTMLElement | null;
     if (!target) return;
+    if (!target.closest(".current-find-query, .current-find-history-menu")) {
+      closeCurrentFindHistory();
+    }
     if (
       target.closest(".popover, .command-popover, .find-popover, .modal, .font-dropdown") ||
       target.closest("[data-menu-trigger]")
@@ -4218,6 +4325,7 @@ function applyEditorPerformanceProfile(doc: OpenDocument) {
   const large = doc.largeFile || doc.fileSize > 2 * 1024 * 1024;
   const editorFont = resolveEditorFontStack();
   document.documentElement.style.setProperty("--editor-font", editorFont);
+  document.documentElement.style.setProperty("--editor-font-size", `${state.fontSize}px`);
   editor.updateOptions({
     readOnly: doc.readOnly,
     readOnlyMessage: { value: doc.readOnlyReason || "当前文档只读" },
@@ -4260,6 +4368,73 @@ function renderAll() {
   renderRightSidebar();
   renderBookmarkDecorations();
   requestEditorLayout();
+}
+
+function bindMarkdownPreviewResize() {
+  const handle = $("markdownPreviewResize");
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    markdownPreviewResizeState = { pointerId: event.pointerId };
+    document.body.classList.add("resizing-markdown-preview");
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!markdownPreviewResizeState || event.pointerId !== markdownPreviewResizeState.pointerId) return;
+    const area = $<HTMLElement>("editorArea").getBoundingClientRect();
+    setMarkdownPreviewWidth(area.right - event.clientX);
+  });
+  const stopDrag = (event: PointerEvent) => {
+    if (markdownPreviewResizeState?.pointerId !== event.pointerId) return;
+    markdownPreviewResizeState = null;
+    document.body.classList.remove("resizing-markdown-preview");
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    scheduleSessionSave();
+  };
+  handle.addEventListener("pointerup", stopDrag);
+  handle.addEventListener("pointercancel", stopDrag);
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const current = currentMarkdownPreviewWidth();
+    setMarkdownPreviewWidth(current + (event.key === "ArrowLeft" ? 20 : -20));
+    scheduleSessionSave();
+  });
+  handle.addEventListener("dblclick", () => {
+    state.markdownPreviewWidth = 0;
+    applyMarkdownPreviewWidth();
+    scheduleSessionSave();
+  });
+  window.addEventListener("resize", applyMarkdownPreviewWidth);
+}
+
+function setMarkdownPreviewWidth(width: number) {
+  const area = $<HTMLElement>("editorArea");
+  const minWidth = 280;
+  const maxWidth = Math.max(minWidth, area.clientWidth - minWidth - 8);
+  state.markdownPreviewWidth = Math.min(maxWidth, Math.max(minWidth, Math.round(width)));
+  applyMarkdownPreviewWidth();
+}
+
+function applyMarkdownPreviewWidth() {
+  const area = $<HTMLElement>("editorArea");
+  if (state.markdownPreviewWidth > 0) {
+    const minWidth = 280;
+    const maxWidth = Math.max(minWidth, area.clientWidth - minWidth - 8);
+    state.markdownPreviewWidth = Math.min(maxWidth, Math.max(minWidth, state.markdownPreviewWidth));
+    area.style.setProperty("--markdown-preview-width", `${state.markdownPreviewWidth}px`);
+  } else {
+    area.style.removeProperty("--markdown-preview-width");
+  }
+  const handle = $("markdownPreviewResize");
+  handle.setAttribute("aria-valuemax", String(Math.max(280, area.clientWidth - 288)));
+  handle.setAttribute("aria-valuenow", String(Math.round(currentMarkdownPreviewWidth())));
+  requestEditorLayout();
+}
+
+function currentMarkdownPreviewWidth() {
+  if (state.markdownPreviewWidth > 0) return state.markdownPreviewWidth;
+  return $("markdownPreview").getBoundingClientRect().width || $<HTMLElement>("editorArea").clientWidth * 0.42;
 }
 
 function renderChrome() {
@@ -4733,6 +4908,86 @@ function renderHistoryLists() {
   $("replaceHistoryDataList").innerHTML = state.replaceHistory
     .map((value) => `<option value="${escapeAttr(value)}"></option>`)
     .join("");
+  renderCurrentFindHistory();
+}
+
+function renderCurrentFindHistory() {
+  const menu = $("currentFindHistoryMenu");
+  menu.innerHTML = "";
+  const history = state.searchHistory.slice(0, 12);
+  if (history.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "current-find-history-empty";
+    empty.textContent = "暂无搜索历史";
+    menu.appendChild(empty);
+    currentFindHistoryActiveIndex = -1;
+    return;
+  }
+  if (currentFindHistoryActiveIndex >= history.length) currentFindHistoryActiveIndex = history.length - 1;
+  history.forEach((value, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "current-find-history-item";
+    button.dataset.historyIndex = String(index);
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(index === currentFindHistoryActiveIndex));
+    button.classList.toggle("active", index === currentFindHistoryActiveIndex);
+    button.textContent = value;
+    button.title = value;
+    button.addEventListener("click", () => applyCurrentFindHistory(value));
+    menu.appendChild(button);
+  });
+}
+
+function openCurrentFindHistory() {
+  renderCurrentFindHistory();
+  $("currentFindHistoryMenu").classList.remove("hidden");
+  $<HTMLButtonElement>("currentFindHistoryButton").setAttribute("aria-expanded", "true");
+  $<HTMLInputElement>("currentFindInput").setAttribute("aria-expanded", "true");
+}
+
+function closeCurrentFindHistory() {
+  $("currentFindHistoryMenu").classList.add("hidden");
+  $<HTMLButtonElement>("currentFindHistoryButton").setAttribute("aria-expanded", "false");
+  $<HTMLInputElement>("currentFindInput").setAttribute("aria-expanded", "false");
+  currentFindHistoryActiveIndex = -1;
+}
+
+function toggleCurrentFindHistory() {
+  if ($("currentFindHistoryMenu").classList.contains("hidden")) openCurrentFindHistory();
+  else closeCurrentFindHistory();
+}
+
+function moveCurrentFindHistorySelection(delta: number) {
+  const items = Array.from($("currentFindHistoryMenu").querySelectorAll<HTMLButtonElement>(".current-find-history-item"));
+  if (items.length === 0) return;
+  currentFindHistoryActiveIndex = currentFindHistoryActiveIndex < 0
+    ? (delta > 0 ? 0 : items.length - 1)
+    : (currentFindHistoryActiveIndex + delta + items.length) % items.length;
+  items.forEach((item, index) => {
+    const active = index === currentFindHistoryActiveIndex;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+  });
+  items[currentFindHistoryActiveIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function selectActiveCurrentFindHistory() {
+  const value = state.searchHistory[currentFindHistoryActiveIndex];
+  if (currentFindHistoryActiveIndex < 0 || value === undefined) return false;
+  applyCurrentFindHistory(value);
+  return true;
+}
+
+function applyCurrentFindHistory(value: string) {
+  const input = $<HTMLInputElement>("currentFindInput");
+  input.value = value;
+  syncCurrentFindControls();
+  commitSearchHistory();
+  closeCurrentFindHistory();
+  scheduleCurrentFind();
+  input.focus();
+  input.setSelectionRange(value.length, value.length);
 }
 
 function renderHistoryButtons(id: string, items: string[], handler: (value: string) => void) {
@@ -4820,9 +5075,11 @@ function resetEditorView() {
   state.editorFontPreset = DEFAULT_EDITOR_FONT_PRESET;
   state.editorFontCustom = EDITOR_FONT_STACKS[DEFAULT_EDITOR_FONT_PRESET];
   state.markdownContentWidth = "typora";
+  state.markdownPreviewWidth = 0;
   applyShellFontSettings();
   applyEditorSettings();
   applyMarkdownContentWidth();
+  applyMarkdownPreviewWidth();
   renderAll();
   scheduleSessionSave();
   log("视图和字体设置已重置");
@@ -5370,14 +5627,19 @@ async function renderMarkdownPreview() {
   const preview = $("markdownPreview");
   const editorArea = preview.parentElement;
   const enabled = isMarkdownPreviewEnabled(doc);
+  const resize = $("markdownPreviewResize");
   const renderVersion = ++markdownPreviewRenderVersion;
   editorArea?.classList.toggle("preview-open", enabled);
+  resize.classList.toggle("hidden", !enabled);
   preview.classList.toggle("hidden", !enabled);
   if (!enabled) {
+    markdownPreviewResizeState = null;
+    document.body.classList.remove("resizing-markdown-preview");
     preview.innerHTML = "";
     requestEditorLayout();
     return;
   }
+  applyMarkdownPreviewWidth();
   const source = doc.model.getValue();
   if (!source.trim()) {
     preview.innerHTML = markdownPreviewShell(doc, source, `<div class="markdown-preview-empty">空白 Markdown</div>`);
@@ -5687,6 +5949,7 @@ function toggleFindOpen(options: { prefillFromSelection?: boolean } = {}) {
     renderRightSidebarToggle();
   } else {
     $("currentFindDock").classList.remove("hidden");
+    closeCurrentFindHistory();
     renderCurrentFindMode();
     requestEditorLayout();
   }
@@ -5704,7 +5967,10 @@ function scheduleCurrentFind() {
       resetSearchResults(true);
       return;
     }
+    const input = $("currentFindInput") as HTMLInputElement;
+    const keepInputFocus = document.activeElement === input;
     findCurrent(false, false);
+    if (keepInputFocus) input.focus();
   }, 90);
 }
 
@@ -5746,6 +6012,9 @@ function renderCurrentFindCount() {
 
 function closeFind() {
   if (!$("currentFindDock").classList.contains("hidden")) {
+    syncCurrentFindControls();
+    commitSearchHistory();
+    closeCurrentFindHistory();
     $("currentFindDock").classList.add("hidden");
     resetSearchResults();
     requestEditorLayout();
@@ -6525,9 +6794,13 @@ async function restoreSession() {
     state.mode = snapshot.workMode ?? (snapshot.workspaceRoot ? "workspace" : "single");
     state.rightTool = snapshot.rightTool === "outline" ? "outline" : "search";
     state.rightSidebarWidth = snapshot.rightSidebarWidth ?? state.rightSidebarWidth;
+    state.markdownPreviewWidth = Number.isFinite(snapshot.markdownPreviewWidth)
+      ? Math.max(0, snapshot.markdownPreviewWidth ?? 0)
+      : 0;
     state.contextMenuEnabled = snapshot.contextMenuEnabled ?? true;
     state.defaultAppCandidateEnabled = snapshot.defaultAppCandidateEnabled ?? true;
     setRightSidebarWidth(state.rightSidebarWidth);
+    applyMarkdownPreviewWidth();
     state.markdownEditMode = isMarkdownEditMode(snapshot.markdownEditMode)
       ? snapshot.markdownEditMode
       : snapshot.markdownPreviewPreferenceSet
@@ -6806,6 +7079,7 @@ async function saveSession() {
     rightSidebarOpen: !$("findPopover").classList.contains("hidden"),
     rightTool: state.rightTool,
     rightSidebarWidth: state.rightSidebarWidth,
+    markdownPreviewWidth: state.markdownPreviewWidth,
     treeScrollTop: $("tree").scrollTop,
     markdownEditMode: state.markdownEditMode,
     markdownContentWidth: state.markdownContentWidth,
