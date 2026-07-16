@@ -53,6 +53,7 @@ function makeState(text: string, type: IDiagramMeta['type'] = 'mermaid'): IDiagr
 function makePreview(text: string, type: IDiagramMeta['type'] = 'mermaid', locale = en) {
     const { muya, i18n } = makeFakeMuya(locale);
     const preview = new DiagramPreview(muya, makeState(text, type));
+    document.body.append(preview.domNode!);
     bootedHosts.push(preview.domNode!);
     return { preview, muya, i18n };
 }
@@ -113,6 +114,97 @@ describe('diagramPreview — invalid / error state', () => {
         const html = preview.domNode!.innerHTML;
         expect(html).toContain('class="mu-diagram-error"');
         expect(html).toContain('图表渲染失败');
+    });
+});
+
+describe('diagramPreview — mermaid SVG ownership', () => {
+    it('normalizes the Mermaid viewBox to its graph bounds without rerendering', async () => {
+        const run = vi.fn(async ({ nodes }: { nodes: HTMLElement[] }) => {
+            nodes[0].innerHTML = '<svg viewBox="-138 -83 2146 2091"><g class="root"></g></svg>';
+            nodes[0].querySelector<SVGGElement>('g.root')!.getBBox = () => ({
+                x: 8,
+                y: 8,
+                width: 509,
+                height: 1758,
+            } as DOMRect);
+        });
+        loadRendererMock.mockResolvedValue({ initialize: vi.fn(), run });
+
+        const { preview } = makePreview('');
+        await preview.update('flowchart TD\nA --> B');
+
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(preview.domNode!.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 525 1774');
+    });
+
+    it('waits for document fonts before Mermaid measures the connected preview', async () => {
+        let resolveFonts!: () => void;
+        const fontsReady = new Promise<void>((resolve) => {
+            resolveFonts = resolve;
+        });
+        const originalFonts = Object.getOwnPropertyDescriptor(document, 'fonts');
+        Object.defineProperty(document, 'fonts', {
+            configurable: true,
+            value: { ready: fontsReady },
+        });
+        const initialize = vi.fn();
+        const run = vi.fn(async () => undefined);
+        loadRendererMock.mockResolvedValue({ initialize, run });
+
+        try {
+            const code = 'flowchart TD\nA --> B';
+            const { preview } = makePreview(code);
+            const update = preview.update(code);
+            await Promise.resolve();
+            expect(run).not.toHaveBeenCalled();
+
+            resolveFonts();
+            await update;
+            expect(run).toHaveBeenCalled();
+        }
+        finally {
+            if (originalFonts)
+                Object.defineProperty(document, 'fonts', originalFonts);
+            else
+                Reflect.deleteProperty(document, 'fonts');
+        }
+    });
+
+    it('renders in the connected preview node so Mermaid measures final DOM geometry', async () => {
+        const initialize = vi.fn();
+        const run = vi.fn(async ({ nodes }: { nodes: HTMLElement[] }) => {
+            expect(nodes).toHaveLength(1);
+            expect(nodes[0].isConnected).toBe(true);
+            expect(nodes[0].textContent).toContain('subgraph TARGET');
+            nodes[0].innerHTML = [
+                '<svg viewBox="0 0 3986 1915">',
+                '<g class="root" transform="translate(8, 8)"></g>',
+                '</svg>',
+            ].join('');
+        });
+        loadRendererMock.mockResolvedValue({ initialize, run });
+
+        const code = [
+            'flowchart TB',
+            'subgraph TARGET["Data"]',
+            'A["A"]',
+            'end',
+            'SOURCE --> TARGET',
+        ].join('\n');
+        const { preview } = makePreview(code);
+        await preview.update(code);
+
+        expect(initialize).toHaveBeenLastCalledWith({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            theme: 'default',
+            htmlLabels: false,
+            flowchart: { htmlLabels: false },
+        });
+        expect(run).toHaveBeenCalled();
+        const svg = preview.domNode!.querySelector('svg')!;
+        expect(svg.getAttribute('viewBox')).toBe('0 0 3986 1915');
+        expect(svg.querySelector('g.root')!.getAttribute('transform')).toBe('translate(8, 8)');
     });
 });
 

@@ -8,7 +8,6 @@ import logger from '../../../utils/logger';
 import Parent from '../../base/parent';
 
 const debug = logger('diagramPreview:');
-let mermaidRenderId = 0;
 
 interface IMermaidRenderJob {
     target: HTMLElement;
@@ -29,8 +28,16 @@ function diagramDistanceFromViewport(target: HTMLElement): number {
     return rect.top > window.innerHeight ? rect.top - window.innerHeight : -rect.bottom;
 }
 
-function waitForDiagramRenderOpportunity(): Promise<void> {
-    return new Promise((resolve) => {
+async function waitForDiagramRenderOpportunity(): Promise<void> {
+    if (document.readyState !== 'complete') {
+        await new Promise<void>((resolve) => {
+            window.addEventListener('load', () => resolve(), { once: true });
+        });
+    }
+    if (document.fonts)
+        await document.fonts.ready;
+    await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => {
         if (typeof window.requestIdleCallback === 'function') {
             window.requestIdleCallback(() => resolve(), { timeout: 80 });
         }
@@ -82,7 +89,7 @@ function applyDiagramSizeClass(svg: SVGSVGElement, width: number, height: number
     svg.classList.remove('mu-diagram-wide', 'mu-diagram-balanced', 'mu-diagram-portrait');
     const ratio = height > 0 ? width / height : 1;
     svg.classList.add(
-        ratio >= 1.2 || width >= 900
+        ratio >= 1.2
             ? 'mu-diagram-wide'
             : ratio >= 0.75
                 ? 'mu-diagram-balanced'
@@ -90,82 +97,53 @@ function applyDiagramSizeClass(svg: SVGSVGElement, width: number, height: number
     );
 }
 
-function compactDisconnectedMermaidRoots(svg: SVGSVGElement, code: string): boolean {
-    const direction = code.match(/^\s*(?:flowchart|graph)\s+(TD|TB|BT|LR|RL)\b/im)?.[1];
-    const graphRoot = svg.querySelector<SVGGElement>('g.root');
-    const nodes = graphRoot?.querySelector<SVGGElement>(':scope > g.nodes');
-    if (!direction || !graphRoot || !nodes)
+function normalizeMermaidViewBox(target: HTMLElement): boolean {
+    const svg = target.querySelector<SVGSVGElement>('svg');
+    const root = svg?.querySelector<SVGGElement>('g.root');
+    if (!svg || !root)
         return false;
-
-    const edgePaths = graphRoot.querySelector<SVGGElement>(':scope > g.edgePaths');
-    if (edgePaths?.querySelector('path'))
+    let bounds: DOMRect | SVGRect;
+    try {
+        bounds = root.getBBox();
+    }
+    catch {
         return false;
-
-    const roots = Array.from(nodes.children).filter(
-        (child): child is SVGGElement => child instanceof SVGGElement && child.classList.contains('root'),
+    }
+    if (
+        ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+        || bounds.width <= 0
+        || bounds.height <= 0
+    )
+        return false;
+    const padding = 8;
+    svg.setAttribute(
+        'viewBox',
+        `${bounds.x - padding} ${bounds.y - padding} ${bounds.width + padding * 2} ${bounds.height + padding * 2}`,
     );
-    if (roots.length < 2)
-        return false;
-
-    const subgraphIds = Array.from(code.matchAll(/^\s*subgraph\s+([A-Za-z0-9_-]+)/gim), match => match[1]);
-    roots.sort((left, right) => {
-        const sourceIndex = (root: SVGGElement) => {
-            const clusterId = root.querySelector<SVGGElement>('g.cluster[id]')?.id ?? '';
-            const index = subgraphIds.findIndex(id => clusterId.endsWith(`-${id}`));
-            return index < 0 ? Number.MAX_SAFE_INTEGER : index;
-        };
-        return sourceIndex(left) - sourceIndex(right);
-    });
-
-    const boxes = roots.map(root => root.getBBox());
-    const gap = 48;
-    const vertical = direction === 'TD' || direction === 'TB' || direction === 'BT';
-    const expectedWidth = vertical
-        ? Math.max(...boxes.map(box => box.width))
-        : boxes.reduce((total, box) => total + box.width, 0) + gap * (boxes.length - 1);
-    const expectedHeight = vertical
-        ? boxes.reduce((total, box) => total + box.height, 0) + gap * (boxes.length - 1)
-        : Math.max(...boxes.map(box => box.height));
-    const currentBounds = nodes.getBBox();
-    if (currentBounds.width <= expectedWidth * 2.5 && currentBounds.height <= expectedHeight * 2.5)
-        return false;
-
-    const inset = 8;
-    let offset = inset;
-    roots.forEach((root, index) => {
-        const box = boxes[index];
-        const x = vertical ? inset + (expectedWidth - box.width) / 2 : offset;
-        const y = vertical ? offset : inset + (expectedHeight - box.height) / 2;
-        root.setAttribute('transform', `translate(${x - box.x}, ${y - box.y})`);
-        offset += (vertical ? box.height : box.width) + gap;
-    });
     return true;
+}
+
+async function renderMermaidInTarget(
+    render: { run: (options: { nodes: HTMLElement[] }) => Promise<void> },
+    target: HTMLElement,
+    code: string,
+): Promise<void> {
+    target.innerHTML = sanitize(code, PREVIEW_DOMPURIFY_CONFIG, true) as string;
+    target.removeAttribute('data-processed');
+    await render.run({ nodes: [target] });
+    normalizeMermaidViewBox(target);
 }
 
 // Give a fixed-size `<svg>` a viewBox when needed, then classify its aspect
 // ratio so the host can enlarge compact diagrams without stretching tall ones
 // across the whole editor.
-function finalizeSvg(target: HTMLElement, tightenViewBox = false): boolean {
+function finalizeSvg(target: HTMLElement): boolean {
     const svg = target.querySelector('svg');
     if (!svg)
         return false;
     const viewBox = svg.viewBox.baseVal;
-    let width = viewBox.width || Number.parseFloat(svg.getAttribute('width') ?? '');
-    let height = viewBox.height || Number.parseFloat(svg.getAttribute('height') ?? '');
-    if (tightenViewBox) {
-        const graph = svg.querySelector<SVGGElement>(':scope > g');
-        const bounds = graph && typeof graph.getBBox === 'function' ? graph.getBBox() : null;
-        if (bounds && bounds.width > 0 && bounds.height > 0) {
-            const padding = 16;
-            width = bounds.width + padding * 2;
-            height = bounds.height + padding * 2;
-            svg.setAttribute(
-                'viewBox',
-                `${bounds.x - padding} ${bounds.y - padding} ${width} ${height}`,
-            );
-            svg.style.maxWidth = `${Math.ceil(width)}px`;
-        }
-    }
+    const width = viewBox.width || Number.parseFloat(svg.getAttribute('width') ?? '');
+    const height = viewBox.height || Number.parseFloat(svg.getAttribute('height') ?? '');
     if (width > 0 && height > 0) {
         if (!svg.getAttribute('viewBox'))
             svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
@@ -222,16 +200,10 @@ async function renderDiagram({
                 startOnLoad: false,
                 securityLevel: 'strict',
                 theme: mermaidTheme,
+                htmlLabels: false,
+                flowchart: { htmlLabels: false },
             });
-            const id = `muya-mermaid-${Date.now()}-${++mermaidRenderId}`;
-            const { svg, bindFunctions } = await render.render(id, code);
-            target.innerHTML = svg;
-            bindFunctions?.(target);
-            const renderedSvg = target.querySelector<SVGSVGElement>('svg');
-            const compacted = renderedSvg
-                ? compactDisconnectedMermaidRoots(renderedSvg, code)
-                : false;
-            finalizeSvg(target, compacted);
+            await renderMermaidInTarget(render, target, code);
         });
         return;
     }
