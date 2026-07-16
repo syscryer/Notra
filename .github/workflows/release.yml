@@ -1,0 +1,223 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows-x64
+            rust_target: ""
+            build_args: ""
+            bundle_root: target/release/bundle
+          - runner: macos-26
+            target: macos-arm64
+            rust_target: aarch64-apple-darwin
+            build_args: --target aarch64-apple-darwin
+            bundle_root: target/aarch64-apple-darwin/release/bundle
+          - runner: ubuntu-22.04
+            target: linux-x64
+            rust_target: x86_64-unknown-linux-gnu
+            build_args: --target x86_64-unknown-linux-gnu
+            bundle_root: target/x86_64-unknown-linux-gnu/release/bundle
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/notra-app/frontend/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        if: matrix.rust_target != ''
+        run: rustup target add ${{ matrix.rust_target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            pkg-config \
+            rpm \
+            wget
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        working-directory: crates/notra-app/frontend
+        run: npm ci
+
+      - name: Validate release version
+        shell: pwsh
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $tauriVersion = (Get-Content "crates/notra-app/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $frontendVersion = (Get-Content "crates/notra-app/frontend/package.json" -Raw | ConvertFrom-Json).version
+          $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $appPackage = $metadata.packages | Where-Object { $_.name -eq "notra-app" }
+          $corePackage = $metadata.packages | Where-Object { $_.name -eq "notra-core" }
+
+          if (-not $appPackage -or -not $corePackage) {
+            Write-Host "::error::Cargo metadata does not contain notra-app and notra-core"
+            exit 1
+          }
+
+          $versions = [ordered]@{
+            "crates/notra-app/tauri.conf.json" = $tauriVersion
+            "crates/notra-app/frontend/package.json" = $frontendVersion
+            "notra-app Cargo package" = $appPackage.version
+            "notra-core Cargo package" = $corePackage.version
+          }
+
+          $hasError = $false
+          foreach ($entry in $versions.GetEnumerator()) {
+            if ($entry.Value -ne $tauriVersion) {
+              Write-Host "::error::$($entry.Key) version $($entry.Value) does not match $tauriVersion"
+              $hasError = $true
+            }
+          }
+
+          if ($env:RELEASE_REF.StartsWith("refs/tags/v")) {
+            $tagVersion = $env:RELEASE_REF_NAME.Substring(1)
+            if ($tagVersion -ne $tauriVersion) {
+              Write-Host "::error::Tag v$tagVersion does not match application version $tauriVersion"
+              $hasError = $true
+            }
+          }
+
+          if ($hasError) {
+            exit 1
+          }
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build platform bundles
+        working-directory: crates/notra-app
+        run: cargo tauri build ${{ matrix.build_args }}
+
+      - name: Collect release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/release-assets.mjs \
+            --bundle-root "${{ matrix.bundle_root }}" \
+            --out-dir release-assets \
+            --artifact "${{ matrix.target }}"
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: notra-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  prepare:
+    name: Prepare release assets
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-assets
+          merge-multiple: true
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(jq -r '.version' crates/notra-app/tauri.conf.json)"
+            echo "Manual validation mode: assets will be prepared for v${version}, but no GitHub Release will be created."
+          fi
+
+          prefix="Notra-${version}/"
+          mkdir -p release-assets
+          find downloaded-assets -maxdepth 1 -type f -exec cp {} release-assets/ \;
+          git archive --format=zip --prefix="$prefix" -o "release-assets/notra-${version}-source.zip" HEAD
+          git archive --format=tar --prefix="$prefix" HEAD | gzip -9 > "release-assets/notra-${version}-source.tar.gz"
+
+          (
+            cd release-assets
+            find . -type f ! -name SHA256SUMS.txt -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          )
+
+          find release-assets -maxdepth 1 -type f -print | sort
+
+      - name: Upload prepared release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: notra-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-22.04
+    needs: prepare
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download prepared release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: notra-release-assets
+          path: release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          generate_release_notes: true
