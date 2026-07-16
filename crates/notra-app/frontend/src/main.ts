@@ -14,6 +14,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   CircleX,
   ClipboardCopy,
   ClipboardPaste,
@@ -48,6 +49,8 @@ import {
   Link2,
   List,
   ListChecks,
+  ListFilter,
+  ListPlus,
   ListOrdered,
   ListRestart,
   ListTree,
@@ -91,6 +94,7 @@ import {
 } from "lucide";
 import type {
   MarkdownEditorBridge,
+  MarkdownSearchMatch,
   MarkdownSearchOptions,
 } from "./markdownEditor";
 import {
@@ -187,6 +191,8 @@ interface SearchReportDto {
   hits: FileHitDto[];
   skipped: string[];
   total: number;
+  filesScanned?: number;
+  elapsedMs?: number;
 }
 
 interface ReplacePreviewDto {
@@ -224,6 +230,19 @@ interface ClosedDocumentSnapshot extends DocumentDto {
 }
 
 type CommandCategory = "文件" | "标签" | "编辑" | "选择" | "查找" | "导航" | "视图" | "书签" | "Markdown";
+
+const KEYBINDING_CATEGORY_ORDER: CommandCategory[] = ["文件", "标签", "编辑", "选择", "查找", "导航", "视图", "书签", "Markdown"];
+const KEYBINDING_CATEGORY_ICONS: Record<CommandCategory, string> = {
+  "文件": "FileText",
+  "标签": "Files",
+  "编辑": "Edit3",
+  "选择": "MousePointerClick",
+  "查找": "Search",
+  "导航": "Map",
+  "视图": "MonitorCog",
+  "书签": "NotebookPen",
+  "Markdown": "FileCode2",
+};
 
 interface AppCommand {
   id: string;
@@ -389,6 +408,8 @@ type DocumentOrigin = "standalone" | "workspace";
 type FindView = "find" | "replace" | "workspace-find" | "workspace-replace";
 type RightTool = "search" | "outline";
 type SearchScope = "current" | "open" | "workspace";
+type WorkspaceSearchStatus = "idle" | "searching" | "previewing" | "applying" | "error";
+type WorkspaceSearchAction = "search" | "preview" | "apply";
 type RenderWhitespaceMode = "none" | "selection" | "all";
 type SettingsSection = "appearance" | "editor" | "keybindings" | "workspace" | "system" | "search" | "about";
 type FontMode = "preset" | "custom";
@@ -721,6 +742,12 @@ const state = {
   searchQuery: "",
   searchSignature: "",
   searchRevision: 0,
+  workspaceSearchStatus: "idle" as WorkspaceSearchStatus,
+  workspaceSearchAction: "search" as WorkspaceSearchAction,
+  workspaceSearchError: "",
+  workspaceSearchRequestId: 0,
+  workspaceSearchVisibleResults: 400,
+  workspaceReplaceVisibleResults: 400,
   findView: "find" as FindView,
   wordWrap: false,
   minimap: false,
@@ -783,6 +810,7 @@ let pendingKeybindingChordTimer = 0;
 let recordingKeybindingCommandId = "";
 let recordingKeybindingStrokes: string[] = [];
 let recordingKeybindingTimer = 0;
+const collapsedKeybindingCategories = new Set<CommandCategory>(KEYBINDING_CATEGORY_ORDER.slice(1));
 let bookmarkDecorations: monaco.editor.IEditorDecorationsCollection | null = null;
 let tabMenuDocumentId = 0;
 let treeMenuTarget: TreeContextTarget | null = null;
@@ -799,6 +827,9 @@ let markdownPreviewRenderVersion = 0;
 let markdownModelSyncTimer = 0;
 let currentFindTimer = 0;
 let currentFindHistoryActiveIndex = -1;
+let searchHistoryField: "find" | "replace" | null = null;
+let searchHistoryActiveIndex = -1;
+let searchResultRenderVersion = 0;
 let markdownEditor: MarkdownEditorBridge | null = null;
 let markdownModulePromise: Promise<typeof import("./markdownEditor")> | null = null;
 let markdownEditorDocumentId = 0;
@@ -855,6 +886,7 @@ const lucideIcons: Record<string, IconNode> = {
   Check,
   ChevronDown,
   ChevronRight,
+  CircleAlert,
   CircleX,
   ClipboardCopy,
   ClipboardPaste,
@@ -889,6 +921,8 @@ const lucideIcons: Record<string, IconNode> = {
   Link2,
   List,
   ListChecks,
+  ListFilter,
+  ListPlus,
   ListOrdered,
   ListRestart,
   ListTree,
@@ -1358,20 +1392,26 @@ function markdownCommand(id: string, title: string, action: string, when: () => 
 }
 
 function bindKeybindings() {
-  document.addEventListener("keydown", handleAppKeybinding, true);
+  $("editor").addEventListener("keydown", handleEditorKeybinding, true);
+  $("markdownWysiwyg").addEventListener("keydown", handleEditorKeybinding, true);
 }
 
-function handleAppKeybinding(event: KeyboardEvent) {
-  if (recordingKeybindingCommandId) {
-    handleKeybindingRecorder(event);
-    return;
-  }
+const NATIVE_CLIPBOARD_SHORTCUTS = new globalThis.Map([
+  ["Ctrl+C", "edit.copy"],
+  ["Ctrl+X", "edit.cut"],
+  ["Ctrl+V", "edit.paste"],
+]);
+
+function handleEditorKeybinding(event: KeyboardEvent) {
   const stroke = keyboardEventStroke(event);
   if (!stroke) return;
-  const targetIsInput = isEditableShortcutTarget(event.target);
   const chord = pendingKeybindingChord ? `${pendingKeybindingChord} ${stroke}` : stroke;
-  const exact = matchingCommands(chord, targetIsInput);
-  const prefix = hasMatchingChordPrefix(chord, targetIsInput);
+  const exact = matchingCommands(chord, false);
+  const prefix = hasMatchingChordPrefix(chord, false);
+  if (usesNativeClipboardShortcut(stroke, exact[0])) {
+    clearPendingKeybindingChord();
+    return;
+  }
   if (exact.length > 0 && !prefix) {
     event.preventDefault();
     event.stopPropagation();
@@ -1387,13 +1427,18 @@ function handleAppKeybinding(event: KeyboardEvent) {
   }
   if (pendingKeybindingChord) {
     clearPendingKeybindingChord();
-    const standalone = matchingCommands(stroke, targetIsInput);
+    const standalone = matchingCommands(stroke, false);
+    if (usesNativeClipboardShortcut(stroke, standalone[0])) return;
     if (standalone.length > 0) {
       event.preventDefault();
       event.stopPropagation();
       void executeAppCommand(standalone[0]);
     }
   }
+}
+
+function usesNativeClipboardShortcut(stroke: string, command: AppCommand | undefined) {
+  return NATIVE_CLIPBOARD_SHORTCUTS.get(stroke) === command?.id;
 }
 
 function matchingCommands(binding: string, targetIsInput: boolean) {
@@ -1438,13 +1483,9 @@ function clearPendingKeybindingChord() {
   if (editor) renderChrome();
 }
 
-function isEditableShortcutTarget(target: EventTarget | null) {
-  return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']"));
-}
-
 function isEditorSurfaceFocused() {
   const active = document.activeElement;
-  return active instanceof HTMLElement && Boolean(active.closest("#editor, #markdownWysiwyg, #markdownPreview"));
+  return active instanceof HTMLElement && Boolean(active.closest("#editor, #markdownWysiwyg"));
 }
 
 function bindActions() {
@@ -1509,6 +1550,8 @@ function bindActions() {
     toggleCurrentFindHistory();
     ($("currentFindInput") as HTMLInputElement).focus();
   });
+  $("findHistoryButton").addEventListener("click", () => toggleSearchHistory("find"));
+  $("replaceHistoryButton").addEventListener("click", () => toggleSearchHistory("replace"));
   $("currentFindPreviousButton").addEventListener("click", () => {
     syncCurrentFindControls();
     commitSearchHistory();
@@ -1569,8 +1612,11 @@ function bindActions() {
     else void findNextResult();
   });
   $("rightSearchToolButton").addEventListener("click", () => {
-    if (state.mode !== "workspace" || !state.workspace) return;
-    if (state.findView !== "workspace-find" && state.findView !== "workspace-replace") setFindView("workspace-find");
+    const workspace = state.mode === "workspace" && Boolean(state.workspace);
+    if (!workspace && !hasCurrentSearchResults()) return;
+    if (workspace && state.findView !== "workspace-find" && state.findView !== "workspace-replace") {
+      setFindView("workspace-find");
+    }
     setRightTool("search");
   });
   $("rightOutlineToolButton").addEventListener("click", () => setRightTool("outline"));
@@ -1615,6 +1661,7 @@ function bindActions() {
   });
   $("settingsResetViewButton").addEventListener("click", resetEditorView);
   $("keybindingSearchInput").addEventListener("input", renderKeybindingSettings);
+  $("toggleKeybindingGroupsButton").addEventListener("click", toggleAllKeybindingGroups);
   $("importKeybindingsButton").addEventListener("click", () => void importKeybindings());
   $("exportKeybindingsButton").addEventListener("click", () => void exportKeybindings());
   $("resetAllKeybindingsButton").addEventListener("click", () => void resetAllKeybindings());
@@ -1686,6 +1733,7 @@ function bindActions() {
     $(id).addEventListener("change", scheduleSessionSave);
   });
   $("findInput").addEventListener("keydown", (event) => {
+    if (handleSearchHistoryKeydown(event as KeyboardEvent, "find")) return;
     if ((event as KeyboardEvent).key !== "Enter") return;
     event.preventDefault();
     if (state.findView === "workspace-find") {
@@ -1704,6 +1752,7 @@ function bindActions() {
   });
   $("closeWorkspaceButton").addEventListener("click", () => void closeWorkspace());
   $("replaceInput").addEventListener("keydown", (event) => {
+    if (handleSearchHistoryKeydown(event as KeyboardEvent, "replace")) return;
     if ((event as KeyboardEvent).key !== "Enter" || state.findView !== "workspace-replace") return;
     event.preventDefault();
     void previewWorkspaceReplace();
@@ -2315,12 +2364,15 @@ function bindRightSidebarResize() {
     setRightSidebarWidth(state.rightSidebarWidth + (event.key === "ArrowLeft" ? 20 : -20));
     scheduleSessionSave();
   });
+  $("searchToolPane").addEventListener("scroll", positionOpenSearchHistoryMenu, true);
+  window.addEventListener("resize", positionOpenSearchHistoryMenu);
 }
 
 function setRightSidebarWidth(width: number) {
   const maxWidth = Math.max(320, Math.floor(window.innerWidth * 0.55));
   state.rightSidebarWidth = Math.min(maxWidth, Math.max(320, Math.round(width)));
   $("app").style.setProperty("--right-sidebar-width", `${state.rightSidebarWidth}px`);
+  positionOpenSearchHistoryMenu();
   requestEditorLayout();
 }
 
@@ -2381,6 +2433,7 @@ function bindOutsideDismissal() {
     if (!target.closest(".current-find-query, .current-find-history-menu")) {
       closeCurrentFindHistory();
     }
+    if (!target.closest(".search-history-field, .search-history-menu")) closeSearchHistory();
     if (
       target.closest(".popover, .command-popover, .find-popover, .modal, .font-dropdown") ||
       target.closest("[data-menu-trigger]")
@@ -2665,8 +2718,8 @@ async function saveDocument(doc: OpenDocument, forceSaveAs: boolean) {
   );
   const currentText = doc.model.getValue();
   Object.assign(doc, saved, {
-    dirty: currentText !== saved.text,
-    savedText: saved.text,
+    dirty: currentText !== textToSave,
+    savedText: textToSave,
     text: currentText,
     fileSize: new Blob([currentText]).size,
     encodingStatus: "编码已识别",
@@ -3495,12 +3548,20 @@ function findCurrent(showPanel = false, recordHistory = true) {
     log("查找内容不能为空");
     return;
   }
+  const patternError = currentSearchPatternError(query);
+  setCurrentFindError(patternError);
+  if (patternError) {
+    resetSearchResults(true);
+    setCurrentFindError(patternError);
+    log(patternError);
+    return;
+  }
   if (recordHistory) commitSearchHistory();
   const doc = activeDocument();
-  const matches = modelMatches(doc);
   const activeMarkdownEditor = isMarkdownWysiwygActive(doc) ? markdownEditor : null;
-  let total = matches.length;
-  let activeIndex = initialSearchResultIndex(total);
+  let matches: TextMatchDto[] = [];
+  let total = 0;
+  let activeIndex = -1;
   if (activeMarkdownEditor) {
     let result = activeMarkdownEditor.search(editorSearchQuery(query), markdownSearchOptions());
     total = result.total;
@@ -3512,6 +3573,11 @@ function findCurrent(showPanel = false, recordHistory = true) {
       });
       activeIndex = result.index;
     }
+    matches = showPanel ? markdownMatchesToDto(activeMarkdownEditor.searchMatches()) : [];
+  } else {
+    matches = modelMatches(doc);
+    total = matches.length;
+    activeIndex = initialSearchResultIndex(total);
   }
   setSearchResults({
     total,
@@ -3521,7 +3587,7 @@ function findCurrent(showPanel = false, recordHistory = true) {
         path: doc.path || doc.title,
         fileName: doc.title,
         encoding: doc.encoding,
-        matches: activeMarkdownEditor ? matches.slice(0, total) : matches,
+        matches,
       },
     ],
   }, "current", activeIndex, showPanel);
@@ -3560,7 +3626,7 @@ function setSearchResults(
   report: SearchReportDto,
   scope: SearchScope,
   activeIndex = report.total > 0 ? 0 : -1,
-  _showPanel = false,
+  showPanel = false,
 ) {
   state.results = report;
   state.searchScope = scope;
@@ -3568,12 +3634,15 @@ function setSearchResults(
   state.searchSignature = currentSearchSignature(scope);
   state.activeResultIndex = activeIndex;
   state.panel = "results";
-  if (scope === "workspace") {
-    setRightTool("search");
+  if (scope === "workspace" || showPanel) {
+    state.workspaceSearchVisibleResults = 400;
+    state.rightTool = "search";
     $("findPopover").classList.remove("hidden");
     $("app").classList.add("right-sidebar-open");
     setRightSidebarWidth(state.rightSidebarWidth);
+    renderRightSidebar();
     renderRightSidebarToggle();
+    scheduleSessionSave();
   }
   renderSearchSidebarResults();
   renderCurrentFindCount();
@@ -3752,6 +3821,7 @@ function resetSearchResults(preserveMarkdownSelection = false) {
   searchDecorations?.clear();
   activeSearchDecoration?.clear();
   markdownEditor?.clearSearch(preserveMarkdownSelection);
+  setCurrentFindError("");
   renderSearchSidebarResults();
   renderCurrentFindCount();
 }
@@ -3943,9 +4013,9 @@ async function searchWorkspace() {
     return;
   }
   commitSearchHistory();
-
-  const report = await withBusy("目录查找中", () =>
-    invoke<SearchReportDto>("search_workspace", {
+  const requestId = beginWorkspaceSearch("search", "searching");
+  try {
+    const report = await invoke<SearchReportDto>("search_workspace", {
       request: {
         root,
         query,
@@ -3958,10 +4028,13 @@ async function searchWorkspace() {
         skipDirs: ($("skipDirsInput") as HTMLInputElement).value || DEFAULT_SKIP_DIRS,
         maxFileSize: 20 * 1024 * 1024,
       },
-    }),
-  );
-  setSearchResults(report, "workspace", -1, true);
-  log(`目录查找 ${report.total} 个命中`);
+    });
+    if (!finishWorkspaceSearch(requestId)) return;
+    setSearchResults(report, "workspace", -1, true);
+    log(`目录查找 ${report.total} 个命中，扫描 ${report.filesScanned ?? 0} 个文件`);
+  } catch (error) {
+    failWorkspaceSearch(requestId, error);
+  }
 }
 
 async function previewWorkspaceReplace() {
@@ -3977,20 +4050,25 @@ async function previewWorkspaceReplace() {
     return;
   }
 
-  const preview = await withBusy("生成替换预览", () =>
-    invoke<ReplacePreviewDto>("preview_workspace_replace", {
+  const requestId = beginWorkspaceSearch("preview", "previewing");
+  try {
+    const preview = await invoke<ReplacePreviewDto>("preview_workspace_replace", {
       request: searchReplaceRequest(root, query, replacement),
-    }),
-  );
-  state.replacePreview = preview;
-  state.replacePreviewApplied = false;
-  state.panel = "preview";
-  setRightTool("search");
-  $("findPopover").classList.remove("hidden");
-  $("app").classList.add("right-sidebar-open");
-  renderRightSidebarToggle();
-  renderSearchSidebarResults();
-  log(`替换预览 ${preview.total} 处修改`);
+    });
+    if (!finishWorkspaceSearch(requestId)) return;
+    state.replacePreview = preview;
+    state.replacePreviewApplied = false;
+    state.workspaceReplaceVisibleResults = 400;
+    state.panel = "preview";
+    setRightTool("search");
+    $("findPopover").classList.remove("hidden");
+    $("app").classList.add("right-sidebar-open");
+    renderRightSidebarToggle();
+    renderSearchSidebarResults();
+    log(`替换预览 ${preview.total} 处修改`);
+  } catch (error) {
+    failWorkspaceSearch(requestId, error);
+  }
 }
 
 async function applyWorkspaceReplace() {
@@ -4012,17 +4090,46 @@ async function applyWorkspaceReplace() {
   });
   if (!confirmed) return;
 
-  const applied = await withBusy("写入目录替换", () =>
-    invoke<ReplacePreviewDto>("apply_workspace_replace", {
+  const requestId = beginWorkspaceSearch("apply", "applying");
+  try {
+    const applied = await invoke<ReplacePreviewDto>("apply_workspace_replace", {
       request: searchReplaceRequest(root, query, replacement),
-    }),
-  );
-  state.replacePreview = applied;
-  state.replacePreviewApplied = true;
-  await refreshOpenDocumentsAfterReplace(applied);
-  state.panel = "preview";
+    });
+    if (!finishWorkspaceSearch(requestId)) return;
+    state.replacePreview = applied;
+    state.replacePreviewApplied = true;
+    await refreshOpenDocumentsAfterReplace(applied);
+    state.panel = "preview";
+    renderSearchSidebarResults();
+    log(`目录替换已写入 ${applied.total} 处`);
+  } catch (error) {
+    failWorkspaceSearch(requestId, error);
+  }
+}
+
+function beginWorkspaceSearch(action: WorkspaceSearchAction, status: WorkspaceSearchStatus) {
+  state.workspaceSearchRequestId += 1;
+  state.workspaceSearchAction = action;
+  state.workspaceSearchStatus = status;
+  state.workspaceSearchError = "";
   renderSearchSidebarResults();
-  log(`目录替换已写入 ${applied.total} 处`);
+  return state.workspaceSearchRequestId;
+}
+
+function finishWorkspaceSearch(requestId: number) {
+  if (requestId !== state.workspaceSearchRequestId) return false;
+  state.workspaceSearchStatus = "idle";
+  state.workspaceSearchError = "";
+  return true;
+}
+
+function failWorkspaceSearch(requestId: number, error: unknown) {
+  if (requestId !== state.workspaceSearchRequestId) return;
+  const message = error instanceof Error ? error.message : String(error);
+  state.workspaceSearchStatus = "error";
+  state.workspaceSearchError = message;
+  renderSearchSidebarResults();
+  log(`文件搜索失败：${message}`);
 }
 
 async function refreshOpenDocumentsAfterReplace(applied: ReplacePreviewDto) {
@@ -4902,13 +5009,176 @@ function renderRecentFiles() {
 }
 
 function renderHistoryLists() {
-  $("findHistoryList").innerHTML = state.searchHistory
-    .map((value) => `<option value="${escapeAttr(value)}"></option>`)
-    .join("");
-  $("replaceHistoryDataList").innerHTML = state.replaceHistory
-    .map((value) => `<option value="${escapeAttr(value)}"></option>`)
-    .join("");
+  renderSearchHistory("find");
+  renderSearchHistory("replace");
   renderCurrentFindHistory();
+}
+
+function searchHistoryConfig(field: "find" | "replace") {
+  return field === "find"
+    ? {
+        input: $<HTMLInputElement>("findInput"),
+        button: $<HTMLButtonElement>("findHistoryButton"),
+        menu: $("findHistoryMenu"),
+        history: state.searchHistory,
+        empty: "暂无搜索历史",
+      }
+    : {
+        input: $<HTMLInputElement>("replaceInput"),
+        button: $<HTMLButtonElement>("replaceHistoryButton"),
+        menu: $("replaceHistoryMenu"),
+        history: state.replaceHistory,
+        empty: "暂无替换历史",
+      };
+}
+
+function renderSearchHistory(field: "find" | "replace") {
+  const { menu, history, empty } = searchHistoryConfig(field);
+  menu.innerHTML = "";
+  const items = history.slice(0, 12);
+  if (items.length === 0) {
+    const placeholder = document.createElement("div");
+    placeholder.className = "search-history-empty";
+    placeholder.textContent = empty;
+    menu.appendChild(placeholder);
+    if (searchHistoryField === field) searchHistoryActiveIndex = -1;
+    return;
+  }
+  if (searchHistoryField === field && searchHistoryActiveIndex >= items.length) {
+    searchHistoryActiveIndex = items.length - 1;
+  }
+  items.forEach((value, index) => {
+    const button = document.createElement("button");
+    const active = searchHistoryField === field && index === searchHistoryActiveIndex;
+    button.type = "button";
+    button.className = "search-history-item";
+    button.dataset.historyIndex = String(index);
+    button.setAttribute("role", "option");
+    button.setAttribute("aria-selected", String(active));
+    button.classList.toggle("active", active);
+    button.textContent = value;
+    button.title = value;
+    button.addEventListener("click", () => applySearchHistory(field, value));
+    menu.appendChild(button);
+  });
+}
+
+function openSearchHistory(field: "find" | "replace") {
+  closeSearchHistory();
+  searchHistoryField = field;
+  searchHistoryActiveIndex = -1;
+  renderSearchHistory(field);
+  const { input, button, menu } = searchHistoryConfig(field);
+  $("findPopover").appendChild(menu);
+  menu.classList.remove("hidden");
+  positionSearchHistoryMenu(field);
+  button.setAttribute("aria-expanded", "true");
+  input.setAttribute("aria-expanded", "true");
+  input.focus();
+}
+
+function positionOpenSearchHistoryMenu() {
+  if (searchHistoryField) positionSearchHistoryMenu(searchHistoryField);
+}
+
+function positionSearchHistoryMenu(field: "find" | "replace") {
+  const { input, menu } = searchHistoryConfig(field);
+  if (menu.classList.contains("hidden")) return;
+  const sidebar = $("findPopover");
+  const control = input.closest<HTMLElement>(".search-history-control");
+  if (!control) return;
+
+  const sidebarRect = sidebar.getBoundingClientRect();
+  const controlRect = control.getBoundingClientRect();
+  const gap = 5;
+  const edge = 8;
+  const maxMenuHeight = 220;
+  const desiredHeight = Math.min(maxMenuHeight, menu.scrollHeight);
+  const availableBelow = Math.max(0, sidebarRect.bottom - controlRect.bottom - gap - edge);
+  const availableAbove = Math.max(0, controlRect.top - sidebarRect.top - gap - edge);
+  const openAbove = availableBelow < desiredHeight && availableAbove > availableBelow;
+  const availableHeight = Math.max(48, openAbove ? availableAbove : availableBelow);
+  const menuHeight = Math.min(desiredHeight, availableHeight);
+
+  menu.classList.toggle("open-above", openAbove);
+  menu.style.left = `${Math.round(controlRect.left - sidebarRect.left)}px`;
+  menu.style.width = `${Math.round(controlRect.width)}px`;
+  menu.style.maxHeight = `${Math.floor(Math.min(maxMenuHeight, availableHeight))}px`;
+  menu.style.top = openAbove
+    ? `${Math.round(controlRect.top - sidebarRect.top - gap - menuHeight)}px`
+    : `${Math.round(controlRect.bottom - sidebarRect.top + gap)}px`;
+}
+
+function closeSearchHistory() {
+  (["find", "replace"] as const).forEach((field) => {
+    const { input, button, menu } = searchHistoryConfig(field);
+    menu.classList.add("hidden");
+    button.setAttribute("aria-expanded", "false");
+    input.setAttribute("aria-expanded", "false");
+  });
+  searchHistoryField = null;
+  searchHistoryActiveIndex = -1;
+}
+
+function toggleSearchHistory(field: "find" | "replace") {
+  const { menu } = searchHistoryConfig(field);
+  if (searchHistoryField === field && !menu.classList.contains("hidden")) closeSearchHistory();
+  else openSearchHistory(field);
+}
+
+function moveSearchHistorySelection(field: "find" | "replace", delta: number) {
+  const { menu } = searchHistoryConfig(field);
+  const items = Array.from(menu.querySelectorAll<HTMLButtonElement>(".search-history-item"));
+  if (items.length === 0) return;
+  searchHistoryActiveIndex = searchHistoryActiveIndex < 0
+    ? (delta > 0 ? 0 : items.length - 1)
+    : (searchHistoryActiveIndex + delta + items.length) % items.length;
+  items.forEach((item, index) => {
+    const active = index === searchHistoryActiveIndex;
+    item.classList.toggle("active", active);
+    item.setAttribute("aria-selected", String(active));
+  });
+  items[searchHistoryActiveIndex]?.scrollIntoView({ block: "nearest" });
+}
+
+function handleSearchHistoryKeydown(event: KeyboardEvent, field: "find" | "replace") {
+  const { menu, history } = searchHistoryConfig(field);
+  if (event.altKey && event.key === "ArrowDown") {
+    event.preventDefault();
+    openSearchHistory(field);
+    moveSearchHistorySelection(field, 1);
+    return true;
+  }
+  if (searchHistoryField !== field || menu.classList.contains("hidden")) return false;
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    event.preventDefault();
+    moveSearchHistorySelection(field, event.key === "ArrowDown" ? 1 : -1);
+    return true;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSearchHistory();
+    return true;
+  }
+  if (event.key === "Enter" && searchHistoryActiveIndex >= 0) {
+    const value = history[searchHistoryActiveIndex];
+    if (value !== undefined) {
+      event.preventDefault();
+      applySearchHistory(field, value);
+      return true;
+    }
+  }
+  return false;
+}
+
+function applySearchHistory(field: "find" | "replace", value: string) {
+  const { input } = searchHistoryConfig(field);
+  input.value = value;
+  closeSearchHistory();
+  input.focus();
+  input.setSelectionRange(value.length, value.length);
+  scheduleSessionSave();
 }
 
 function renderCurrentFindHistory() {
@@ -5114,6 +5384,30 @@ function renderSearchSidebarResults() {
   const body = $("findResultsBody");
   const title = $("findResultsTitle");
   const summary = $("findResultsSummary");
+  const renderVersion = ++searchResultRenderVersion;
+  renderWorkspaceSearchControls();
+
+  const busy = workspaceSearchIsBusy();
+  body.closest(".find-results-pane")?.setAttribute("aria-busy", String(busy));
+  if (busy) {
+    const label = state.workspaceSearchStatus === "applying"
+      ? "正在写入替换"
+      : state.workspaceSearchStatus === "previewing"
+        ? "正在生成替换预览"
+        : "正在搜索文件";
+    title.textContent = state.workspaceSearchStatus === "searching" ? "搜索结果" : "替换预览";
+    summary.textContent = label;
+    body.innerHTML = `<div class="workspace-search-progress" role="status">${iconSvg("LoaderCircle")}<strong>${label}</strong><span>正在扫描目录，请稍候…</span></div><div class="search-skeleton" aria-hidden="true">${Array.from({ length: 5 }, () => `<span></span>`).join("")}</div>`;
+    return;
+  }
+  if (state.workspaceSearchStatus === "error") {
+    title.textContent = state.workspaceSearchAction === "search" ? "搜索结果" : "替换预览";
+    summary.textContent = "操作失败";
+    body.innerHTML = `<div class="workspace-search-error" role="alert">${iconSvg("CircleAlert")}<strong>未能完成操作</strong><span>${escapeHtml(state.workspaceSearchError)}</span><button class="tool-button primary" id="retryWorkspaceSearchButton">${iconSvg("RefreshCw")}<span>重试</span></button></div>`;
+    $("retryWorkspaceSearchButton").addEventListener("click", retryWorkspaceSearch);
+    return;
+  }
+
   if (state.panel === "preview") {
     title.textContent = "替换预览";
     if (!state.replacePreview || state.replacePreview.total === 0) {
@@ -5129,21 +5423,18 @@ function renderSearchSidebarResults() {
     }
     const replaceStatus = state.replacePreviewApplied ? "已写入" : "待确认";
     summary.textContent = `${state.replacePreview.total} 处 · ${state.replacePreview.items.length} 个文件`;
-    const groups = state.replacePreview.items.map((item) => {
-      const rows = item.matches.map((match) => `<button class="find-result-row" data-path="${escapeAttr(item.path)}" data-line="${match.line}" data-column="${match.column}"><span class="find-result-line">${match.line}:${match.column}</span><span class="find-result-preview">${escapeHtml(match.matchedText)} → ${escapeHtml(($("replaceInput") as HTMLInputElement).value)}</span></button>`).join("");
-      return `<section class="find-result-group"><header>${iconSvg("FileText")}<strong>${escapeHtml(item.fileName)}</strong><span>${item.matches.length} 处 · ${replaceStatus}</span></header><div>${rows}</div></section>`;
-    });
     const applyButton = state.replacePreviewApplied
       ? ""
       : `<button class="tool-button primary" id="applyReplaceButton">${iconSvg("Save")}<span>写入文件</span></button>`;
-    body.innerHTML = `<div class="find-result-actions">${applyButton}<button class="tool-button" id="clearReplacePreviewButton">${iconSvg("X")}<span>清除</span></button></div><div class="find-result-list">${groups.join("")}</div>`;
+    body.innerHTML = `<div class="find-result-actions">${applyButton}<button class="tool-button" id="clearReplacePreviewButton">${iconSvg("X")}<span>清除</span></button></div><div class="find-result-list" id="replacePreviewResultList"></div>`;
     $("applyReplaceButton")?.addEventListener("click", () => void applyWorkspaceReplace());
     $("clearReplacePreviewButton").addEventListener("click", clearReplacePreview);
-    body.querySelectorAll<HTMLButtonElement>("[data-path]").forEach((row) => {
-      row.addEventListener("click", () =>
-        void openResult(row.dataset.path ?? "", Number(row.dataset.line ?? "1"), Number(row.dataset.column ?? "1")),
-      );
+    const list = $("replacePreviewResultList");
+    list.addEventListener("click", (event) => {
+      const row = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-path]");
+      if (row) void openResult(row.dataset.path ?? "", Number(row.dataset.line ?? "1"), Number(row.dataset.column ?? "1"));
     });
+    renderProgressiveReplaceResults(state.replacePreview, list, replaceStatus, renderVersion);
     return;
   }
   title.textContent = "搜索结果";
@@ -5153,26 +5444,171 @@ function renderSearchSidebarResults() {
     return;
   }
   if (state.results.total === 0) {
-    summary.textContent = "0 处命中";
+    summary.textContent = searchReportSummary(state.results);
     body.innerHTML = `<div class="find-result-empty"><span>没有命中，可检查大小写、全词或文件过滤。</span><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除</span></button></div>`;
     $("clearResultsButton").addEventListener("click", clearSearchResults);
     return;
   }
-  summary.textContent = `${state.results.total} 处 · ${state.results.hits.length} 个文件`;
-  let resultIndex = 0;
-  const groups = state.results.hits.map((hit) => {
-    const rows = hit.matches.map((match) => {
-      const index = resultIndex;
-      resultIndex += 1;
-      return `<button class="find-result-row ${index === state.activeResultIndex ? "result-active" : ""}" data-result-index="${index}"><span class="find-result-line">${match.line}:${match.column}</span><span class="find-result-preview">${highlightMatchLine(match)}</span></button>`;
-    }).join("");
-    return `<section class="find-result-group"><header>${iconSvg("FileText")}<strong>${escapeHtml(hit.fileName)}</strong><span>${hit.matches.length} 处</span></header><div>${rows}</div></section>`;
-  });
-  body.innerHTML = `<div class="find-result-actions"><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除</span></button></div><div class="find-result-list">${groups.join("")}</div>`;
+  summary.textContent = searchReportSummary(state.results);
+  body.innerHTML = `<div class="find-result-actions"><button class="tool-button" id="clearResultsButton">${iconSvg("X")}<span>清除</span></button></div><div class="find-result-list" id="workspaceSearchResultList"></div>`;
   $("clearResultsButton").addEventListener("click", clearSearchResults);
-  body.querySelectorAll<HTMLButtonElement>("[data-result-index]").forEach((row) => {
-    row.addEventListener("click", () => void openSearchResult(Number(row.dataset.resultIndex ?? "0")));
+  const list = $("workspaceSearchResultList");
+  list.addEventListener("click", (event) => {
+    const row = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-result-index]");
+    if (row) void openSearchResult(Number(row.dataset.resultIndex ?? "0"));
   });
+  renderProgressiveSearchResults(state.results, list, renderVersion);
+}
+
+function workspaceSearchIsBusy() {
+  return state.workspaceSearchStatus === "searching"
+    || state.workspaceSearchStatus === "previewing"
+    || state.workspaceSearchStatus === "applying";
+}
+
+function renderWorkspaceSearchControls() {
+  const busy = workspaceSearchIsBusy();
+  const searchButton = $<HTMLButtonElement>("findWorkspaceButton");
+  const previewButton = $<HTMLButtonElement>("previewWorkspaceReplaceButton");
+  searchButton.disabled = busy;
+  previewButton.disabled = busy;
+  searchButton.classList.toggle("is-searching", state.workspaceSearchStatus === "searching");
+  previewButton.classList.toggle("is-searching", state.workspaceSearchStatus === "previewing" || state.workspaceSearchStatus === "applying");
+  setIconSlot(searchButton.querySelector(".workspace-action-icon"), state.workspaceSearchStatus === "searching" ? "LoaderCircle" : "Search");
+  setIconSlot(previewButton.querySelector(".workspace-action-icon"), state.workspaceSearchStatus === "previewing" || state.workspaceSearchStatus === "applying" ? "LoaderCircle" : "ReplaceAll");
+  const searchLabel = searchButton.querySelector<HTMLElement>(".workspace-action-label");
+  const previewLabel = previewButton.querySelector<HTMLElement>(".workspace-action-label");
+  if (searchLabel) searchLabel.textContent = state.workspaceSearchStatus === "searching" ? "正在搜索" : "在文件中查找";
+  if (previewLabel) previewLabel.textContent = state.workspaceSearchStatus === "applying"
+    ? "正在写入"
+    : state.workspaceSearchStatus === "previewing"
+      ? "正在生成预览"
+      : "预览全部替换";
+}
+
+function retryWorkspaceSearch() {
+  if (state.workspaceSearchAction === "search") void searchWorkspace();
+  else if (state.workspaceSearchAction === "preview") void previewWorkspaceReplace();
+  else void applyWorkspaceReplace();
+}
+
+function searchReportSummary(report: SearchReportDto) {
+  const parts = [`${report.total} 处`, `${report.hits.length} 个文件`];
+  if (report.filesScanned !== undefined) parts.push(`扫描 ${report.filesScanned}`);
+  if (report.elapsedMs !== undefined) parts.push(formatSearchDuration(report.elapsedMs));
+  return parts.join(" · ");
+}
+
+function formatSearchDuration(milliseconds: number) {
+  return milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(1)} s`;
+}
+
+function renderProgressiveSearchResults(report: SearchReportDto, list: HTMLElement, renderVersion: number) {
+  let hitIndex = 0;
+  let matchIndex = 0;
+  let resultIndex = 0;
+  let rows: HTMLElement | null = null;
+  const limit = Math.min(report.total, state.workspaceSearchVisibleResults);
+
+  const appendBatch = () => {
+    if (renderVersion !== searchResultRenderVersion || !list.isConnected) return;
+    const started = performance.now();
+    let appended = 0;
+    while (hitIndex < report.hits.length && resultIndex < limit && appended < 120 && performance.now() - started < 8) {
+      const hit = report.hits[hitIndex];
+      if (matchIndex === 0) {
+        const group = document.createElement("section");
+        group.className = "find-result-group";
+        group.innerHTML = `<header>${iconSvg("FileText")}<strong title="${escapeAttr(hit.path)}">${escapeHtml(hit.fileName)}</strong><span>${hit.matches.length} 处</span></header><div></div>`;
+        list.appendChild(group);
+        rows = group.lastElementChild as HTMLElement;
+      }
+      const match = hit.matches[matchIndex];
+      const row = document.createElement("button");
+      row.className = `find-result-row ${resultIndex === state.activeResultIndex ? "result-active" : ""}`;
+      row.dataset.resultIndex = String(resultIndex);
+      row.innerHTML = `<span class="find-result-line">${match.line}:${match.column}</span><span class="find-result-preview">${highlightMatchLine(match)}</span>`;
+      rows?.appendChild(row);
+      matchIndex += 1;
+      resultIndex += 1;
+      appended += 1;
+      if (matchIndex >= hit.matches.length) {
+        hitIndex += 1;
+        matchIndex = 0;
+        rows = null;
+      }
+    }
+    if (resultIndex < limit && hitIndex < report.hits.length) {
+      window.requestAnimationFrame(appendBatch);
+      return;
+    }
+    if (limit < report.total) appendMoreResultsButton(list, report.total - limit, "search");
+  };
+  appendBatch();
+}
+
+function renderProgressiveReplaceResults(
+  report: ReplacePreviewDto,
+  list: HTMLElement,
+  replaceStatus: string,
+  renderVersion: number,
+) {
+  let itemIndex = 0;
+  let matchIndex = 0;
+  let rendered = 0;
+  let rows: HTMLElement | null = null;
+  const limit = Math.min(report.total, state.workspaceReplaceVisibleResults);
+  const replacement = ($("replaceInput") as HTMLInputElement).value;
+
+  const appendBatch = () => {
+    if (renderVersion !== searchResultRenderVersion || !list.isConnected) return;
+    const started = performance.now();
+    let appended = 0;
+    while (itemIndex < report.items.length && rendered < limit && appended < 120 && performance.now() - started < 8) {
+      const item = report.items[itemIndex];
+      if (matchIndex === 0) {
+        const group = document.createElement("section");
+        group.className = "find-result-group";
+        group.innerHTML = `<header>${iconSvg("FileText")}<strong title="${escapeAttr(item.path)}">${escapeHtml(item.fileName)}</strong><span>${item.matches.length} 处 · ${replaceStatus}</span></header><div></div>`;
+        list.appendChild(group);
+        rows = group.lastElementChild as HTMLElement;
+      }
+      const match = item.matches[matchIndex];
+      const row = document.createElement("button");
+      row.className = "find-result-row";
+      row.dataset.path = item.path;
+      row.dataset.line = String(match.line);
+      row.dataset.column = String(match.column);
+      row.innerHTML = `<span class="find-result-line">${match.line}:${match.column}</span><span class="find-result-preview">${escapeHtml(match.matchedText)} <span class="replace-arrow">→</span> ${escapeHtml(replacement)}</span>`;
+      rows?.appendChild(row);
+      matchIndex += 1;
+      rendered += 1;
+      appended += 1;
+      if (matchIndex >= item.matches.length) {
+        itemIndex += 1;
+        matchIndex = 0;
+        rows = null;
+      }
+    }
+    if (rendered < limit && itemIndex < report.items.length) {
+      window.requestAnimationFrame(appendBatch);
+      return;
+    }
+    if (limit < report.total) appendMoreResultsButton(list, report.total - limit, "replace");
+  };
+  appendBatch();
+}
+
+function appendMoreResultsButton(list: HTMLElement, remaining: number, kind: "search" | "replace") {
+  const footer = document.createElement("div");
+  footer.className = "find-results-more";
+  footer.innerHTML = `<span>还有 ${remaining} 处结果</span><button class="tool-button">${iconSvg("ListPlus")}<span>继续显示</span></button>`;
+  footer.querySelector("button")?.addEventListener("click", () => {
+    if (kind === "search") state.workspaceSearchVisibleResults += 600;
+    else state.workspaceReplaceVisibleResults += 600;
+    renderSearchSidebarResults();
+  });
+  list.appendChild(footer);
 }
 
 function renderMarkdownOutline() {
@@ -5908,7 +6344,7 @@ function setFindView(view: FindView, persist = true) {
 }
 
 function toggleInputRow(id: string, visible: boolean) {
-  $(id).closest("label")?.classList.toggle("hidden", !visible);
+  $(id).closest(".search-history-field, label")?.classList.toggle("hidden", !visible);
 }
 
 function toggleCheckRow(id: string, visible: boolean) {
@@ -5940,7 +6376,7 @@ function toggleFindOpen(options: { prefillFromSelection?: boolean } = {}) {
     }
   }
   if (isWorkspaceFindView()) {
-    $("currentFindDock").classList.add("hidden");
+    setCurrentFindDockOpen(false);
     setRightTool("search");
     $("findPopover").classList.remove("hidden");
     $("app").classList.add("right-sidebar-open");
@@ -5948,7 +6384,7 @@ function toggleFindOpen(options: { prefillFromSelection?: boolean } = {}) {
     renderRightSidebar();
     renderRightSidebarToggle();
   } else {
-    $("currentFindDock").classList.remove("hidden");
+    setCurrentFindDockOpen(true);
     closeCurrentFindHistory();
     renderCurrentFindMode();
     requestEditorLayout();
@@ -6010,12 +6446,36 @@ function renderCurrentFindCount() {
   $("currentFindCount").textContent = active > 0 ? `${active}/${currentResults.total}` : `${currentResults.total} 个结果`;
 }
 
+function currentSearchPatternError(query: string) {
+  if (!(($("currentRegexInput") as HTMLInputElement).checked) || !query) return "";
+  try {
+    const expression = new RegExp(query);
+    return expression.test("") ? "正则表达式不能匹配空字符串" : "";
+  } catch {
+    return "正则表达式无效";
+  }
+}
+
+function setCurrentFindError(message: string) {
+  const input = $<HTMLInputElement>("currentFindInput");
+  input.classList.toggle("error", Boolean(message));
+  input.setAttribute("aria-invalid", String(Boolean(message)));
+  if (message) input.title = message;
+  else input.removeAttribute("title");
+}
+
+function setCurrentFindDockOpen(open: boolean) {
+  $("currentFindDock").classList.toggle("hidden", !open);
+  document.body.classList.toggle("current-find-open", open);
+  if (open) markdownEditor?.hideFloatTools();
+}
+
 function closeFind() {
   if (!$("currentFindDock").classList.contains("hidden")) {
     syncCurrentFindControls();
     commitSearchHistory();
     closeCurrentFindHistory();
-    $("currentFindDock").classList.add("hidden");
+    setCurrentFindDockOpen(false);
     resetSearchResults();
     requestEditorLayout();
     focusActiveEditor();
@@ -6025,7 +6485,13 @@ function closeFind() {
 }
 
 function closeRightSidebar() {
+  if (workspaceSearchIsBusy()) {
+    state.workspaceSearchRequestId += 1;
+    state.workspaceSearchStatus = "idle";
+    state.workspaceSearchError = "";
+  }
   $("findPopover").classList.add("hidden");
+  closeSearchHistory();
   $("app").classList.remove("right-sidebar-open");
   renderRightSidebarToggle();
   requestEditorLayout();
@@ -6045,11 +6511,14 @@ function toggleRightSidebar() {
   }
   const workspace = state.mode === "workspace" && Boolean(state.workspace);
   const markdown = isMarkdownLikeDocument();
-  if (!workspace && !markdown) return;
-  if (workspace) {
+  const currentResults = hasCurrentSearchResults();
+  if (!workspace && !markdown && !currentResults) return;
+  if (currentResults) {
+    state.rightTool = "search";
+  } else if (workspace) {
     setFindView(isWorkspaceFindView() ? state.findView : "workspace-find");
     state.rightTool = "search";
-    $("currentFindDock").classList.add("hidden");
+    setCurrentFindDockOpen(false);
   } else {
     state.rightTool = "outline";
   }
@@ -6063,7 +6532,9 @@ function toggleRightSidebar() {
 }
 
 function renderRightSidebarToggle() {
-  const available = (state.mode === "workspace" && Boolean(state.workspace)) || isMarkdownLikeDocument();
+  const available = (state.mode === "workspace" && Boolean(state.workspace))
+    || isMarkdownLikeDocument()
+    || hasCurrentSearchResults();
   const open = !$("findPopover").classList.contains("hidden");
   const button = $<HTMLButtonElement>("rightSidebarToggleButton");
   $("rightToolTabs").classList.toggle("hidden", !available);
@@ -6096,13 +6567,14 @@ function openMarkdownOutline() {
 function renderRightSidebar() {
   const markdown = isMarkdownLikeDocument();
   const workspace = state.mode === "workspace" && Boolean(state.workspace);
-  $("rightSearchToolButton").classList.toggle("hidden", !workspace);
+  const searchAvailable = workspace || hasCurrentSearchResults();
+  $("rightSearchToolButton").classList.toggle("hidden", !searchAvailable);
   $("rightOutlineToolButton").classList.toggle("hidden", !markdown);
   document.querySelectorAll<HTMLElement>(".workspace-find-view").forEach((button) => {
     button.classList.toggle("hidden", !workspace);
   });
-  if (!workspace && state.rightTool === "search") state.rightTool = markdown ? "outline" : "search";
-  if (!markdown && state.rightTool === "outline") state.rightTool = workspace ? "search" : "outline";
+  if (!searchAvailable && state.rightTool === "search") state.rightTool = markdown ? "outline" : "search";
+  if (!markdown && state.rightTool === "outline") state.rightTool = searchAvailable ? "search" : "outline";
   $("rightSearchToolButton").classList.toggle("active", state.rightTool === "search");
   $("rightOutlineToolButton").classList.toggle("active", state.rightTool === "outline");
   $("searchToolPane").classList.toggle("hidden", state.rightTool !== "search");
@@ -6110,6 +6582,10 @@ function renderRightSidebar() {
   renderSearchSidebarResults();
   renderMarkdownOutline();
   renderRightSidebarToggle();
+}
+
+function hasCurrentSearchResults() {
+  return state.searchScope === "current" && state.results !== null;
 }
 
 function selectedEditorTextForFind() {
@@ -6425,39 +6901,102 @@ function renderKeybindingSettings() {
       const bindings = activeCommandBindings(item.id).join(" ");
       return !query || `${item.title} ${item.category} ${item.id} ${bindings}`.toLowerCase().includes(query);
     })
-    .sort((a, b) => a.category.localeCompare(b.category, "zh-CN") || a.title.localeCompare(b.title, "zh-CN"));
+    .sort((a, b) => KEYBINDING_CATEGORY_ORDER.indexOf(a.category) - KEYBINDING_CATEGORY_ORDER.indexOf(b.category)
+      || a.title.localeCompare(b.title, "zh-CN"));
   if (commands.length === 0) {
     list.innerHTML = `<div class="empty compact">没有匹配的快捷键</div>`;
+    updateKeybindingGroupToggle([], query);
     return;
   }
   const conflicts = keybindingConflictMap();
+  const groups = KEYBINDING_CATEGORY_ORDER
+    .map((category) => ({ category, commands: commands.filter((item) => item.category === category) }))
+    .filter((group) => group.commands.length > 0);
   list.innerHTML = "";
-  for (const item of commands) {
-    const row = document.createElement("div");
-    row.className = "keybinding-row";
-    row.setAttribute("role", "listitem");
-    const bindings = activeCommandBindings(item.id);
-    const recording = recordingKeybindingCommandId === item.id;
-    const displayBindings = recording && recordingKeybindingStrokes.length > 0
-      ? [recordingKeybindingStrokes.join(" ")]
-      : bindings;
-    const conflict = bindings.some((binding) => (conflicts.get(binding)?.length ?? 0) > 1);
-    const custom = Object.prototype.hasOwnProperty.call(state.keybindingOverrides, item.id);
-    row.innerHTML = `
-      <div class="keybinding-command"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.category)} · ${escapeHtml(item.id)}</span></div>
-      <button class="keybinding-value ${recording ? "recording" : ""} ${conflict ? "conflict" : ""}" type="button" data-record-command="${escapeAttr(item.id)}" title="${conflict ? "存在快捷键冲突" : "点击重新录入"}">
-        ${recording && displayBindings.length === 0 ? `<span class="keybinding-empty">请按快捷键...</span>` : renderBindingKeys(displayBindings)}
+  for (const { category, commands: categoryCommands } of groups) {
+    const collapsed = !query && collapsedKeybindingCategories.has(category);
+    const customCount = categoryCommands.filter((item) => Object.prototype.hasOwnProperty.call(state.keybindingOverrides, item.id)).length;
+    const group = document.createElement("section");
+    const groupId = `keybinding-group-${KEYBINDING_CATEGORY_ORDER.indexOf(category)}`;
+    group.className = `keybinding-group ${collapsed ? "collapsed" : ""}`;
+    group.setAttribute("role", "group");
+    group.setAttribute("aria-labelledby", `${groupId}-label`);
+    group.innerHTML = `
+      <button class="keybinding-group-toggle" type="button" data-keybinding-category="${escapeAttr(category)}" aria-expanded="${String(!collapsed)}" ${query ? "disabled" : ""}>
+        <span class="keybinding-group-icon">${iconSvg(KEYBINDING_CATEGORY_ICONS[category])}</span>
+        <strong id="${groupId}-label">${escapeHtml(category)}</strong>
+        <span class="keybinding-group-meta">${categoryCommands.length} 个命令${customCount > 0 ? ` · ${customCount} 个自定义` : ""}</span>
+        <span class="keybinding-group-chevron">${iconSvg("ChevronDown")}</span>
       </button>
-      <div class="keybinding-actions"><span class="keybinding-source">${custom ? "自定义" : KEYMAP_PROFILE_LABELS[resolveKeymapProfile(state.keymapProfile, state.mode)]}</span><button class="keybinding-reset" type="button" data-reset-command="${escapeAttr(item.id)}" aria-label="恢复 ${escapeAttr(item.title)} 默认快捷键" title="恢复默认" ${custom ? "" : "disabled"}>${iconSvg("Undo2")}</button></div>
+      <div class="keybinding-group-body"></div>
     `;
-    list.appendChild(row);
+    const body = group.querySelector<HTMLElement>(".keybinding-group-body")!;
+    categoryCommands.forEach((item) => body.appendChild(createKeybindingRow(item, conflicts)));
+    list.appendChild(group);
   }
+  updateKeybindingGroupToggle(groups.map((group) => group.category), query);
+  list.querySelectorAll<HTMLButtonElement>("[data-keybinding-category]").forEach((button) => {
+    button.addEventListener("click", () => toggleKeybindingGroup(button.dataset.keybindingCategory as CommandCategory));
+  });
   list.querySelectorAll<HTMLButtonElement>("[data-record-command]").forEach((button) => {
     button.addEventListener("click", () => startKeybindingRecording(button.dataset.recordCommand ?? ""));
+    button.addEventListener("keydown", (event) => {
+      if (recordingKeybindingCommandId === button.dataset.recordCommand) handleKeybindingRecorder(event);
+    });
   });
   list.querySelectorAll<HTMLButtonElement>("[data-reset-command]").forEach((button) => {
     button.addEventListener("click", () => resetKeybinding(button.dataset.resetCommand ?? ""));
   });
+}
+
+function createKeybindingRow(item: AppCommand, conflicts: ReadonlyMap<string, string[]>) {
+  const row = document.createElement("div");
+  row.className = "keybinding-row";
+  row.setAttribute("role", "listitem");
+  const bindings = activeCommandBindings(item.id);
+  const recording = recordingKeybindingCommandId === item.id;
+  const displayBindings = recording && recordingKeybindingStrokes.length > 0
+    ? [recordingKeybindingStrokes.join(" ")]
+    : bindings;
+  const conflict = bindings.some((binding) => (conflicts.get(binding)?.length ?? 0) > 1);
+  const custom = Object.prototype.hasOwnProperty.call(state.keybindingOverrides, item.id);
+  row.innerHTML = `
+    <div class="keybinding-command"><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(item.id)}</span></div>
+    <button class="keybinding-value ${recording ? "recording" : ""} ${conflict ? "conflict" : ""}" type="button" data-record-command="${escapeAttr(item.id)}" title="${conflict ? "存在快捷键冲突" : "点击重新录入"}">
+      ${recording && displayBindings.length === 0 ? `<span class="keybinding-empty">请按快捷键...</span>` : renderBindingKeys(displayBindings)}
+    </button>
+    <div class="keybinding-actions"><span class="keybinding-source">${custom ? "自定义" : KEYMAP_PROFILE_LABELS[resolveKeymapProfile(state.keymapProfile, state.mode)]}</span><button class="keybinding-reset" type="button" data-reset-command="${escapeAttr(item.id)}" aria-label="恢复 ${escapeAttr(item.title)} 默认快捷键" title="恢复默认" ${custom ? "" : "disabled"}>${iconSvg("Undo2")}</button></div>
+  `;
+  return row;
+}
+
+function toggleKeybindingGroup(category: CommandCategory) {
+  if (!KEYBINDING_CATEGORY_ORDER.includes(category)) return;
+  if (collapsedKeybindingCategories.has(category)) collapsedKeybindingCategories.delete(category);
+  else collapsedKeybindingCategories.add(category);
+  renderKeybindingSettings();
+}
+
+function toggleAllKeybindingGroups() {
+  if (($<HTMLInputElement>("keybindingSearchInput").value ?? "").trim()) return;
+  const categories = KEYBINDING_CATEGORY_ORDER.filter((category) =>
+    [...appCommands.values()].some((item) => item.category === category));
+  const collapse = !categories.every((category) => collapsedKeybindingCategories.has(category));
+  categories.forEach((category) => {
+    if (collapse) collapsedKeybindingCategories.add(category);
+    else collapsedKeybindingCategories.delete(category);
+  });
+  renderKeybindingSettings();
+}
+
+function updateKeybindingGroupToggle(categories: CommandCategory[], query: string) {
+  const button = $<HTMLButtonElement>("toggleKeybindingGroupsButton");
+  const allCollapsed = categories.length > 0 && categories.every((category) => collapsedKeybindingCategories.has(category));
+  const label = button.querySelector<HTMLElement>("[data-label]");
+  const text = allCollapsed ? "全部展开" : "全部收起";
+  if (label) label.textContent = text;
+  button.disabled = Boolean(query) || categories.length === 0;
+  button.title = query ? "清除搜索后可折叠分组" : text;
 }
 
 function renderBindingKeys(bindings: string[]) {
@@ -6483,10 +7022,12 @@ function keybindingConflictMap() {
 }
 
 function startKeybindingRecording(commandId: string) {
-  if (!appCommands.has(commandId)) return;
+  const item = appCommands.get(commandId);
+  if (!item) return;
   window.clearTimeout(recordingKeybindingTimer);
   recordingKeybindingCommandId = commandId;
   recordingKeybindingStrokes = [];
+  collapsedKeybindingCategories.delete(item.category);
   renderKeybindingSettings();
   listRecordingButton(commandId)?.focus();
 }
@@ -7443,6 +7984,10 @@ function languageFromFilePath(path: string) {
   if (extension === "ts") return "typescript";
   if (extension === "yml") return "yaml";
   return "plaintext";
+}
+
+function markdownMatchesToDto(matches: MarkdownSearchMatch[]): TextMatchDto[] {
+  return matches.map((match) => ({ ...match }));
 }
 
 function highlightMatchLine(match: TextMatchDto) {

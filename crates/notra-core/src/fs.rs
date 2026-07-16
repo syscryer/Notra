@@ -1,11 +1,13 @@
 use crate::document::EncodingKind;
 use crate::search::{
-    ReplaceOutcome, SearchError, SearchOptions, TextMatch, find_all, preview_replace,
+    ReplaceOutcome, SearchError, SearchMatcher, SearchOptions, TextMatch,
+    apply_replace_all_with_matcher,
 };
 use encoding_rs::{GBK, UTF_8};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use walkdir::{DirEntry, WalkDir};
 
 #[derive(Debug, Clone)]
@@ -32,6 +34,8 @@ pub struct FileReplacePreview {
 pub struct DirectorySearchReport {
     pub hits: Vec<FileHit>,
     pub skipped: Vec<String>,
+    pub files_scanned: usize,
+    pub elapsed_ms: u64,
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> DecodedText {
@@ -133,8 +137,11 @@ pub fn search_directory(
     query: &str,
     options: &SearchOptions,
 ) -> Result<DirectorySearchReport, SearchError> {
+    let started = Instant::now();
     let root = root.as_ref();
     let mut report = DirectorySearchReport::default();
+    let matcher = SearchMatcher::new(query, options)?;
+    let file_glob = FileGlobMatcher::new(&options.file_glob);
     let skip_dirs = parse_list(&options.skip_dirs);
     let mut walker = WalkDir::new(root);
     if !options.recursive {
@@ -155,7 +162,7 @@ pub fn search_directory(
             continue;
         }
         let path = entry.path();
-        if !matches_glob(path, &options.file_glob) {
+        if !file_glob.matches(path) {
             continue;
         }
         let metadata = match entry.metadata() {
@@ -171,9 +178,10 @@ pub fn search_directory(
                 .push(format!("{}: file too large", path.display()));
             continue;
         }
+        report.files_scanned += 1;
         match read_text(path) {
             Ok(decoded) => {
-                let matches = find_all(&decoded.text, query, options)?;
+                let matches = matcher.find_all(&decoded.text);
                 if !matches.is_empty() {
                     report.hits.push(FileHit {
                         path: path.to_path_buf(),
@@ -185,6 +193,7 @@ pub fn search_directory(
             Err(err) => report.skipped.push(format!("{}: {err}", path.display())),
         }
     }
+    report.elapsed_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
     Ok(report)
 }
 
@@ -194,6 +203,7 @@ pub fn preview_directory_replace(
     replacement: &str,
     options: &SearchOptions,
 ) -> Result<(Vec<FileReplacePreview>, Vec<String>), SearchError> {
+    let matcher = SearchMatcher::new(query, options)?;
     let report = search_directory(root, query, options)?;
     let mut previews = Vec::new();
     let mut skipped = report.skipped;
@@ -211,7 +221,8 @@ pub fn preview_directory_replace(
         }
         match read_text(&hit.path) {
             Ok(decoded) => {
-                let outcome = preview_replace(&decoded.text, query, replacement, options)?;
+                let outcome =
+                    apply_replace_all_with_matcher(&decoded.text, replacement, options, &matcher);
                 if outcome.count > 0 {
                     previews.push(FileReplacePreview {
                         path: hit.path,
@@ -355,33 +366,78 @@ fn parse_list(input: &str) -> Vec<String> {
         .collect()
 }
 
-fn matches_glob(path: &Path, glob: &str) -> bool {
-    let patterns = parse_list(glob);
-    if patterns.is_empty() || patterns.iter().any(|p| p == "*.*" || p == "*") {
-        return true;
-    }
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let extension = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+enum FileGlobPattern {
+    Extension(String),
+    ContainsAll(Vec<String>),
+    NameOrExtension(String),
+}
 
-    patterns.iter().any(|pattern| {
-        let pattern = pattern.trim().to_ascii_lowercase();
-        if let Some(ext) = pattern.strip_prefix("*.") {
-            extension == ext
-        } else if pattern.contains('*') {
-            let parts: Vec<_> = pattern.split('*').filter(|p| !p.is_empty()).collect();
-            parts.iter().all(|part| file_name.contains(part))
+struct FileGlobMatcher {
+    match_all: bool,
+    patterns: Vec<FileGlobPattern>,
+}
+
+impl FileGlobMatcher {
+    fn new(glob: &str) -> Self {
+        let raw_patterns = parse_list(glob);
+        let match_all = raw_patterns.is_empty()
+            || raw_patterns
+                .iter()
+                .any(|pattern| pattern == "*.*" || pattern == "*");
+        let patterns = if match_all {
+            Vec::new()
         } else {
-            file_name == pattern || extension == pattern.trim_start_matches('.')
+            raw_patterns
+                .into_iter()
+                .map(|pattern| pattern.to_ascii_lowercase())
+                .map(|pattern| {
+                    if let Some(extension) = pattern.strip_prefix("*.") {
+                        FileGlobPattern::Extension(extension.to_owned())
+                    } else if pattern.contains('*') {
+                        FileGlobPattern::ContainsAll(
+                            pattern
+                                .split('*')
+                                .filter(|part| !part.is_empty())
+                                .map(ToOwned::to_owned)
+                                .collect(),
+                        )
+                    } else {
+                        FileGlobPattern::NameOrExtension(pattern)
+                    }
+                })
+                .collect()
+        };
+        Self {
+            match_all,
+            patterns,
         }
-    })
+    }
+
+    fn matches(&self, path: &Path) -> bool {
+        if self.match_all {
+            return true;
+        }
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let extension = path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+
+        self.patterns.iter().any(|pattern| match pattern {
+            FileGlobPattern::Extension(expected) => extension == *expected,
+            FileGlobPattern::ContainsAll(parts) => {
+                parts.iter().all(|part| file_name.contains(part))
+            }
+            FileGlobPattern::NameOrExtension(expected) => {
+                file_name == *expected || extension == expected.trim_start_matches('.')
+            }
+        })
+    }
 }
 
 #[cfg(test)]
@@ -418,6 +474,38 @@ mod tests {
 
         assert_eq!(report.hits.len(), 1);
         assert!(report.hits[0].path.ends_with("top.txt"));
+    }
+
+    #[test]
+    fn file_glob_matches_multiple_masks_without_case_sensitivity() {
+        let matcher = FileGlobMatcher::new("*.rs; *.MD");
+
+        assert!(matcher.matches(Path::new("main.RS")));
+        assert!(matcher.matches(Path::new("README.md")));
+        assert!(!matcher.matches(Path::new("package.json")));
+    }
+
+    #[test]
+    fn directory_search_reports_scanned_files_and_elapsed_time() {
+        let root =
+            std::env::temp_dir().join(format!("notra-search-report-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("hit.txt"), "notra").unwrap();
+        fs::write(root.join("miss.txt"), "another editor").unwrap();
+        fs::write(root.join("ignored.md"), "notra").unwrap();
+
+        let options = SearchOptions {
+            file_glob: "*.txt".to_owned(),
+            ..Default::default()
+        };
+        let report = search_directory(&root, "notra", &options).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(report.files_scanned, 2);
+        assert_eq!(report.hits.len(), 1);
+        assert!(report.hits[0].path.ends_with("hit.txt"));
+        assert!(report.elapsed_ms < 10_000);
     }
 
     #[test]

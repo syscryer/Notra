@@ -218,7 +218,7 @@
                     <span class="icon-slot" data-icon="ChevronDown"></span>
                   </button>
                 </div>
-                <input class="hidden" id="currentReplaceInput" list="replaceHistoryDataList" aria-label="替换为" placeholder="替换为" />
+                <input class="hidden" id="currentReplaceInput" autocomplete="off" aria-label="替换为" placeholder="替换为" />
                 <div class="current-find-options">
                   <label title="匹配大小写"><input type="checkbox" id="currentMatchCaseInput" /><span>Aa</span></label>
                   <label title="全词匹配"><input type="checkbox" id="currentWholeWordInput" /><span>W</span></label>
@@ -546,9 +546,10 @@
                 <span class="icon-slot" data-icon="Search"></span>
                 <input id="keybindingSearchInput" type="search" placeholder="搜索命令、分类或按键" autocomplete="off" />
               </label>
+              <button class="settings-action" id="toggleKeybindingGroupsButton"><span class="icon-slot" data-icon="ListTree"></span><span data-label>全部收起</span></button>
               <button class="settings-action" id="importKeybindingsButton"><span class="icon-slot" data-icon="ClipboardPaste"></span><span>导入</span></button>
               <button class="settings-action" id="exportKeybindingsButton"><span class="icon-slot" data-icon="ClipboardCopy"></span><span>导出</span></button>
-              <button class="settings-action" id="resetAllKeybindingsButton">全部恢复默认</button>
+              <button class="settings-action" id="resetAllKeybindingsButton"><span class="icon-slot" data-icon="Undo2"></span><span>全部恢复默认</span></button>
             </div>
             <div class="keybinding-list" id="keybindingList" role="list"></div>
           </section>
@@ -807,32 +808,49 @@
           </div>
           <div class="find-body">
             <div class="field-stack">
-            <label class="find-query-row"><span>查找目标</span><input id="findInput" list="findHistoryList" /></label>
-            <label class="replace-query-row"><span>替换为</span><input id="replaceInput" list="replaceHistoryDataList" /></label>
-            <div class="checks find-flags">
-              <label class="reverse-option" data-short="←" title="反向查找"><input type="checkbox" id="reverseSearchInput" /><span>反向查找</span></label>
-              <label class="whole-word-option" data-short="W" title="全词匹配"><input type="checkbox" id="wholeWordInput" /><span>全词匹配</span></label>
-              <label class="match-case-option" data-short="Aa" title="匹配大小写"><input type="checkbox" id="matchCaseInput" /><span>匹配大小写</span></label>
-              <label class="wrap-option" data-short="循" title="循环查找"><input type="checkbox" id="wrapSearchInput" checked /><span>循环查找</span></label>
-              <label class="selection-option" data-short="选" title="选取范围内"><input type="checkbox" id="searchSelectionInput" /><span>选取范围内</span></label>
-            </div>
-            <fieldset class="search-mode-field" id="searchModeInput">
-              <legend>查找模式</legend>
-              <label class="literal-mode" data-short="文本"><input type="radio" name="searchMode" value="literal" checked /><span>普通</span></label>
-              <label class="extended-mode" data-short="扩展"><input type="radio" name="searchMode" value="extended" /><span>扩展</span></label>
-              <label class="regex-mode" data-short=".*"><input type="radio" name="searchMode" value="regex" /><span>正则表达式</span></label>
-            </fieldset>
-            <datalist id="findHistoryList"></datalist>
-            <datalist id="replaceHistoryDataList"></datalist>
-            <div class="workspace-search-fields hidden" id="workspaceSearchFields">
-              <label><span>搜索目录</span><input id="directoryInput" placeholder="选择工作目录" /></label>
-              <label><span>文件掩码</span><input id="fileGlobInput" value="*.*" placeholder="例如 *.ts;*.rs" /></label>
-              <label><span>排除目录</span><input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" /></label>
-              <div class="checks workspace-search-flags">
-                <label><input type="checkbox" id="recursiveInput" checked />包含子目录</label>
-                <label><input type="checkbox" id="includeHiddenInput" />包含隐藏文件</label>
+              <div class="find-query-row search-history-field">
+                <label for="findInput">查找目标</label>
+                <div class="search-history-control">
+                  <input id="findInput" autocomplete="off" aria-controls="findHistoryMenu" aria-expanded="false" placeholder="输入要查找的文本" />
+                  <button class="search-history-toggle" id="findHistoryButton" type="button" aria-label="搜索历史" aria-controls="findHistoryMenu" aria-expanded="false" title="搜索历史"><span class="icon-slot" data-icon="ChevronDown"></span></button>
+                  <div class="search-history-menu hidden" id="findHistoryMenu" role="listbox" aria-label="搜索历史"></div>
+                </div>
               </div>
-            </div>
+              <div class="replace-query-row search-history-field">
+                <label for="replaceInput">替换为</label>
+                <div class="search-history-control">
+                  <input id="replaceInput" autocomplete="off" aria-controls="replaceHistoryMenu" aria-expanded="false" placeholder="输入替换文本" />
+                  <button class="search-history-toggle" id="replaceHistoryButton" type="button" aria-label="替换历史" aria-controls="replaceHistoryMenu" aria-expanded="false" title="替换历史"><span class="icon-slot" data-icon="ChevronDown"></span></button>
+                  <div class="search-history-menu hidden" id="replaceHistoryMenu" role="listbox" aria-label="替换历史"></div>
+                </div>
+              </div>
+              <div class="workspace-search-options">
+                <div class="checks find-flags" aria-label="查找选项">
+                  <label class="reverse-option" data-short="←" title="反向查找"><input type="checkbox" id="reverseSearchInput" /><span>反向查找</span></label>
+                  <label class="whole-word-option" data-short="W" title="全词匹配"><input type="checkbox" id="wholeWordInput" /><span>全词</span></label>
+                  <label class="match-case-option" data-short="Aa" title="匹配大小写"><input type="checkbox" id="matchCaseInput" /><span>区分大小写</span></label>
+                  <label class="wrap-option" data-short="循" title="循环查找"><input type="checkbox" id="wrapSearchInput" checked /><span>循环</span></label>
+                  <label class="selection-option" data-short="选" title="选取范围内"><input type="checkbox" id="searchSelectionInput" /><span>选区</span></label>
+                </div>
+                <fieldset class="search-mode-field" id="searchModeInput">
+                  <legend>查找模式</legend>
+                  <label class="literal-mode" data-short="文本"><input type="radio" name="searchMode" value="literal" checked /><span>普通</span></label>
+                  <label class="extended-mode" data-short="扩展"><input type="radio" name="searchMode" value="extended" /><span>扩展</span></label>
+                  <label class="regex-mode" data-short=".*"><input type="radio" name="searchMode" value="regex" /><span>正则</span></label>
+                </fieldset>
+              </div>
+              <details class="workspace-search-fields hidden" id="workspaceSearchFields" open>
+                <summary><span class="icon-slot" data-icon="ListFilter"></span><strong>文件过滤</strong><small>目录、掩码与排除项</small><span class="icon-slot workspace-filter-chevron" data-icon="ChevronDown"></span></summary>
+                <div class="workspace-search-filter-body">
+                  <label><span>目录</span><input id="directoryInput" placeholder="选择工作目录" /></label>
+                  <label><span>文件</span><input id="fileGlobInput" value="*.*" placeholder="例如 *.ts;*.rs" /></label>
+                  <label><span>排除</span><input id="skipDirsInput" value=".git;target;target-codex-run;node_modules;dist;build" /></label>
+                  <div class="checks workspace-search-flags">
+                    <label><input type="checkbox" id="recursiveInput" checked /><span>包含子目录</span></label>
+                    <label><input type="checkbox" id="includeHiddenInput" /><span>包含隐藏文件</span></label>
+                  </div>
+                </div>
+              </details>
             </div>
             <div class="action-stack">
               <button class="primary" id="findNextButton"><span class="icon-slot" data-icon="ArrowDown"></span><span>下一个</span></button>
@@ -840,11 +858,11 @@
               <button id="findCurrentButton"><span class="icon-slot" data-icon="FileSearch"></span><span>全部查找</span></button>
               <button id="replaceCurrentButton"><span class="icon-slot" data-icon="Replace"></span><span>替换当前</span></button>
               <button id="replaceAllCurrentButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>全部替换</span></button>
-              <button class="primary" id="findWorkspaceButton"><span class="icon-slot" data-icon="Files"></span><span>在文件中查找</span></button>
-              <button class="primary" id="previewWorkspaceReplaceButton"><span class="icon-slot" data-icon="ReplaceAll"></span><span>预览全部替换</span></button>
+              <button class="primary workspace-search-submit" id="findWorkspaceButton"><span class="icon-slot workspace-action-icon" data-icon="Search"></span><span class="workspace-action-label">在文件中查找</span></button>
+              <button class="primary workspace-search-submit" id="previewWorkspaceReplaceButton"><span class="icon-slot workspace-action-icon" data-icon="ReplaceAll"></span><span class="workspace-action-label">预览全部替换</span></button>
             </div>
           </div>
-          <section class="find-results-pane" aria-label="搜索结果">
+          <section class="find-results-pane" aria-label="搜索结果" aria-live="polite" aria-busy="false">
             <header><strong id="findResultsTitle">搜索结果</strong><span id="findResultsSummary">暂无结果</span></header>
             <div class="find-results-body" id="findResultsBody"></div>
           </section>

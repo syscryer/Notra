@@ -37,6 +37,15 @@ export type MarkdownSearchState = {
   index: number;
 };
 
+export type MarkdownSearchMatch = {
+  start: number;
+  end: number;
+  line: number;
+  column: number;
+  lineText: string;
+  matchedText: string;
+};
+
 export type MarkdownOutlineItem = {
   level: number;
   text: string;
@@ -685,6 +694,62 @@ export class MarkdownEditorBridge {
     return { total: result.matches.length, index: result.index };
   }
 
+  searchMatches(): MarkdownSearchMatch[] {
+    const matches = this.muya.editor.searchModule.matches;
+    if (matches.length === 0) return [];
+
+    this.muya.flush();
+    const cleanMarkdown = normalizeMarkdownForEngine(this.muya.getMarkdown());
+    let markerPrefix = "nOtRaSeArChMaTcH";
+    while (cleanMarkdown.includes(markerPrefix)) markerPrefix += "X";
+
+    const state = structuredClone(this.muya.editor.jsonState.getState());
+    const markers = matches.map((match, index) => ({
+      marker: `${markerPrefix}${index.toString(36).padStart(7, "0")}Qx`,
+      match,
+      rawIndex: -1,
+      cleanIndex: -1,
+    }));
+
+    const descending = [...markers].sort((left, right) => {
+      const leftPath = left.match.block.path.join(".");
+      const rightPath = right.match.block.path.join(".");
+      return leftPath === rightPath ? right.match.start - left.match.start : leftPath.localeCompare(rightPath);
+    });
+    for (const item of descending) {
+      if (!injectSearchMarker(state, item.match.block.path, item.match.start, item.marker)) {
+        throw new Error("无法映射 Markdown 搜索结果位置");
+      }
+    }
+
+    const markedMarkdown = this.muya.editor.jsonState.getMarkdownFromState(state);
+    for (const item of markers) {
+      item.rawIndex = markedMarkdown.indexOf(item.marker);
+      if (item.rawIndex < 0) throw new Error("无法定位 Markdown 搜索结果标记");
+    }
+
+    let removedLength = 0;
+    for (const item of [...markers].sort((left, right) => left.rawIndex - right.rawIndex)) {
+      item.cleanIndex = item.rawIndex - removedLength;
+      removedLength += item.marker.length;
+    }
+    const source = markers.reduce((markdown, item) => markdown.replace(item.marker, ""), markedMarkdown);
+    const sourceLines = source.split("\n");
+    const lineStarts = markdownLineStarts(source);
+
+    return markers.map((item) => {
+      const position = markdownPositionAt(lineStarts, item.cleanIndex);
+      return {
+        start: item.cleanIndex,
+        end: item.cleanIndex + item.match.match.length,
+        line: position.line + 1,
+        column: position.column + 1,
+        lineText: sourceLines[position.line] ?? "",
+        matchedText: item.match.match.split("\n", 1)[0] ?? item.match.match,
+      };
+    });
+  }
+
   private revealActiveSearchMatch() {
     window.requestAnimationFrame(() => {
       this.root.querySelector<HTMLElement>(".mu-highlight")?.scrollIntoView({
@@ -787,6 +852,48 @@ export class MarkdownEditorBridge {
     this.muya.off("heading-copy-link", this.headingCopyListener);
     this.muya.destroy();
   }
+}
+
+function injectSearchMarker(
+  state: unknown,
+  path: Array<string | number>,
+  offset: number,
+  marker: string,
+) {
+  if (path.length === 0) return false;
+  let node = state;
+  for (let index = 0; index < path.length - 1; index += 1) {
+    if (node === null || typeof node !== "object") return false;
+    node = (node as Record<string | number, unknown>)[path[index]];
+  }
+  if (node === null || typeof node !== "object") return false;
+  const key = path[path.length - 1];
+  const holder = node as Record<string | number, unknown>;
+  const text = holder[key];
+  if (typeof text !== "string") return false;
+  const at = Math.min(text.length, Math.max(0, offset));
+  holder[key] = `${text.slice(0, at)}${marker}${text.slice(at)}`;
+  return true;
+}
+
+function markdownLineStarts(markdown: string) {
+  const starts = [0];
+  for (let index = 0; index < markdown.length; index += 1) {
+    if (markdown.charCodeAt(index) === 10) starts.push(index + 1);
+  }
+  return starts;
+}
+
+function markdownPositionAt(lineStarts: number[], offset: number) {
+  let low = 0;
+  let high = lineStarts.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (lineStarts[middle] <= offset) low = middle + 1;
+    else high = middle - 1;
+  }
+  const line = Math.max(0, high);
+  return { line, column: offset - lineStarts[line] };
 }
 
 function expandRegexReplacement(

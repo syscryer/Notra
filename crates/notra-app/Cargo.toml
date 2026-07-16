@@ -19,6 +19,7 @@ serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
 tauri-plugin-single-instance.workspace = true
+tauri-plugin-window-state.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true

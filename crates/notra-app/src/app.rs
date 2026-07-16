@@ -164,6 +164,8 @@ pub struct SearchReportDto {
     pub hits: Vec<FileHitDto>,
     pub skipped: Vec<String>,
     pub total: usize,
+    pub files_scanned: usize,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -305,8 +307,19 @@ pub struct WorkspacePathRequest {
     pub path: String,
 }
 
+fn persisted_window_state_flags() -> tauri_plugin_window_state::StateFlags {
+    tauri_plugin_window_state::StateFlags::SIZE
+        | tauri_plugin_window_state::StateFlags::POSITION
+        | tauri_plugin_window_state::StateFlags::MAXIMIZED
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(persisted_window_state_flags())
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let request = classify_open_args(args.into_iter().skip(1), Some(Path::new(&cwd)));
             if !request.files.is_empty() || !request.directories.is_empty() {
@@ -322,6 +335,12 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                use tauri_plugin_window_state::WindowExt;
+                if let Err(error) = window.restore_state(persisted_window_state_flags()) {
+                    eprintln!("恢复窗口状态失败：{error}");
+                }
+            }
             let database_path = app
                 .path()
                 .app_data_dir()
@@ -890,6 +909,8 @@ fn sanitize_workspace_entry_name(value: &str) -> Result<String, String> {
 
 fn search_report_to_dto(report: DirectorySearchReport) -> SearchReportDto {
     let total = report.hits.iter().map(|hit| hit.matches.len()).sum();
+    let files_scanned = report.files_scanned;
+    let elapsed_ms = report.elapsed_ms;
     SearchReportDto {
         hits: report
             .hits
@@ -908,6 +929,8 @@ fn search_report_to_dto(report: DirectorySearchReport) -> SearchReportDto {
             .collect(),
         skipped: report.skipped,
         total,
+        files_scanned,
+        elapsed_ms,
     }
 }
 

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
+    "test:keybindings": "node scripts/verify-keybindings.mjs",
     "markdown:sync": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../../scripts/sync-marktext-muya.ps1",
     "preview": "vite preview --host 127.0.0.1 --port 1420"
   },

@@ -7,13 +7,14 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "MIT OR Apache-2.0"
-repository = "https://gitee.com/systems/notra"
+license = "MIT"
+repository = "https://github.com/syscryer/Notra"
 
 [workspace.dependencies]
 notra-core = { path = "crates/notra-core" }
 tauri = "2"
 tauri-build = "2"
+tauri-plugin-window-state = "2.4.1"
 rfd = "0.17.2"
 encoding_rs = "0.8.35"
 regex = "1.12.4"

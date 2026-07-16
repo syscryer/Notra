@@ -68,6 +68,42 @@ pub struct ReplaceOutcome {
     pub matches: Vec<TextMatch>,
 }
 
+pub(crate) struct SearchMatcher {
+    pattern: Regex,
+    whole_word: bool,
+}
+
+impl SearchMatcher {
+    pub(crate) fn new(query: &str, options: &SearchOptions) -> Result<Self, SearchError> {
+        Ok(Self {
+            pattern: compile_pattern(query, options)?,
+            whole_word: options.whole_word,
+        })
+    }
+
+    pub(crate) fn find_all(&self, text: &str) -> Vec<TextMatch> {
+        let ranges = self.matching_ranges(text);
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+
+        let line_index = LineIndex::new(text);
+        ranges
+            .into_iter()
+            .map(|(start, end)| line_index.match_from_range(text, start, end))
+            .collect()
+    }
+
+    fn matching_ranges(&self, text: &str) -> Vec<(usize, usize)> {
+        self.pattern
+            .find_iter(text)
+            .filter(|mat| mat.start() != mat.end())
+            .filter(|mat| !self.whole_word || is_whole_word(text, mat.start(), mat.end()))
+            .map(|mat| (mat.start(), mat.end()))
+            .collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum SearchError {
     EmptyQuery,
@@ -92,19 +128,7 @@ pub fn find_all(
     query: &str,
     options: &SearchOptions,
 ) -> Result<Vec<TextMatch>, SearchError> {
-    let pattern = compile_pattern(query, options)?;
-    let mut results = Vec::new();
-    let line_index = LineIndex::new(text);
-    for mat in pattern.find_iter(text) {
-        if mat.start() == mat.end() {
-            continue;
-        }
-        if options.whole_word && !is_whole_word(text, mat.start(), mat.end()) {
-            continue;
-        }
-        results.push(line_index.match_from_range(text, mat.start(), mat.end()));
-    }
-    Ok(results)
+    Ok(SearchMatcher::new(query, options)?.find_all(text))
 }
 
 pub fn preview_replace(
@@ -122,30 +146,48 @@ pub fn apply_replace_all(
     replacement: &str,
     options: &SearchOptions,
 ) -> Result<ReplaceOutcome, SearchError> {
-    let matches = find_all(text, query, options)?;
+    let matcher = SearchMatcher::new(query, options)?;
+    Ok(apply_replace_all_with_matcher(
+        text,
+        replacement,
+        options,
+        &matcher,
+    ))
+}
+
+pub(crate) fn apply_replace_all_with_matcher(
+    text: &str,
+    replacement: &str,
+    options: &SearchOptions,
+    matcher: &SearchMatcher,
+) -> ReplaceOutcome {
+    let matches = matcher.find_all(text);
     if matches.is_empty() {
-        return Ok(ReplaceOutcome {
+        return ReplaceOutcome {
             text: text.to_owned(),
             count: 0,
             matches,
-        });
+        };
     }
 
     if options.mode == SearchMode::Regex {
-        let regex = compile_pattern(query, options)?;
         let mut out = String::with_capacity(text.len());
         let mut last = 0;
         for m in &matches {
             out.push_str(&text[last..m.range.start]);
-            out.push_str(&regex.replace(&text[m.range.start..m.range.end], replacement));
+            out.push_str(
+                &matcher
+                    .pattern
+                    .replace(&text[m.range.start..m.range.end], replacement),
+            );
             last = m.range.end;
         }
         out.push_str(&text[last..]);
-        Ok(ReplaceOutcome {
+        ReplaceOutcome {
             text: out,
             count: matches.len(),
             matches,
-        })
+        }
     } else {
         let replacement = normalized_replacement(replacement, options);
         let mut out = String::with_capacity(text.len());
@@ -156,11 +198,11 @@ pub fn apply_replace_all(
             last = m.range.end;
         }
         out.push_str(&text[last..]);
-        Ok(ReplaceOutcome {
+        ReplaceOutcome {
             text: out,
             count: matches.len(),
             matches,
-        })
+        }
     }
 }
 
@@ -316,6 +358,37 @@ mod tests {
         };
         let hits = find_all("a\nb\n", "\\n", &options).unwrap();
         assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn matcher_can_be_reused_across_multiple_documents() {
+        let options = SearchOptions {
+            whole_word: true,
+            ..Default::default()
+        };
+        let matcher = SearchMatcher::new("notra", &options).unwrap();
+
+        let first = matcher.find_all("Notra is open");
+        let second = matcher.find_all("notradamus notra");
+        let empty = matcher.find_all("another editor");
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].column, 12);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn matcher_rejects_invalid_regex_when_created() {
+        let options = SearchOptions {
+            mode: SearchMode::Regex,
+            ..Default::default()
+        };
+
+        assert!(matches!(
+            SearchMatcher::new("(", &options),
+            Err(SearchError::InvalidRegex(_))
+        ));
     }
 
     #[test]
