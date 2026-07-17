@@ -24,7 +24,6 @@ import { Link2, createElement as createLucideElement } from "lucide";
 import {
   classifyMermaidDiagramSize,
   createMermaidRenderConfig,
-  inheritMermaidSubgraphDirection,
   runMermaidWithCompatibility,
 } from "../vendor/marktext-muya/src/utils/diagram/mermaidCompat";
 
@@ -243,7 +242,7 @@ async function renderMermaidDiagram(pre: HTMLPreElement, source: string, darkMod
     if (!pre.isConnected) return;
     const { default: mermaid } = await import("mermaid");
     const container = diagramContainer("mermaid");
-    container.textContent = inheritMermaidSubgraphDirection(source);
+    container.textContent = source;
     pre.replaceWith(container);
     try {
       await waitForDiagramRenderOpportunity();

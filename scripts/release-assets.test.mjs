@@ -53,7 +53,7 @@ test("只识别可发布安装包", () => {
   assert.equal(isSupportedAssetFile("Notra.txt"), false);
 });
 
-test("递归收集并复制安装包", async () => {
+test("递归收集并复制安装包及其更新签名", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "notra-release-assets-"));
   const bundleRoot = path.join(root, "bundle");
   const nested = path.join(bundleRoot, "nsis");
@@ -62,6 +62,7 @@ test("递归收集并复制安装包", async () => {
   try {
     await mkdir(nested, { recursive: true });
     await writeFile(path.join(nested, "Notra_0.1.0_x64-setup.exe"), "installer");
+    await writeFile(path.join(nested, "Notra_0.1.0_x64-setup.exe.sig"), "signature");
     await writeFile(path.join(nested, "ignored.txt"), "ignored");
 
     const copied = await collectAndCopyReleaseAssets({
@@ -70,9 +71,10 @@ test("递归收集并复制安装包", async () => {
       artifact: "windows-x64",
     });
 
-    assert.equal(copied.length, 1);
+    assert.equal(copied.length, 2);
     const destination = path.join(outDir, "Notra_0.1.0_x64-setup-windows-x64.exe");
     assert.equal(await readFile(destination, "utf8"), "installer");
+    assert.equal(await readFile(`${destination}.sig`, "utf8"), "signature");
     assert.equal(existsSync(path.join(outDir, "ignored-windows-x64.txt")), false);
   } finally {
     await rm(root, { recursive: true, force: true });

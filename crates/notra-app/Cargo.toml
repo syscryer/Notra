@@ -10,6 +10,9 @@ build = "build.rs"
 name = "notra"
 path = "src/main.rs"
 
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
 [dependencies]
 notra-core.workspace = true
 tauri = { workspace = true, features = ["protocol-asset"] }
@@ -20,6 +23,8 @@ serde_json.workspace = true
 rusqlite.workspace = true
 tauri-plugin-single-instance.workspace = true
 tauri-plugin-window-state.workspace = true
+tauri-plugin-process.workspace = true
+tauri-plugin-updater.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 winreg.workspace = true

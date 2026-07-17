@@ -7,7 +7,6 @@ import loadRenderer from '../../../utils/diagram';
 import {
     classifyMermaidDiagramSize,
     createMermaidRenderConfig,
-    inheritMermaidSubgraphDirection,
     runMermaidWithCompatibility,
 } from '../../../utils/diagram/mermaidCompat';
 import logger from '../../../utils/logger';
@@ -135,11 +134,7 @@ async function renderMermaidInTarget(
     target: HTMLElement,
     code: string,
 ): Promise<void> {
-    target.innerHTML = sanitize(
-        inheritMermaidSubgraphDirection(code),
-        PREVIEW_DOMPURIFY_CONFIG,
-        true,
-    ) as string;
+    target.innerHTML = sanitize(code, PREVIEW_DOMPURIFY_CONFIG, true) as string;
     target.removeAttribute('data-processed');
     await render.run({ nodes: [target] });
     normalizeMermaidViewBox(target);

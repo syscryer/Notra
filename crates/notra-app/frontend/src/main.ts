@@ -1,6 +1,9 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
   ArrowDown,
   ArrowUp,
@@ -286,6 +289,7 @@ interface SessionSnapshot {
   rightSidebarOpen: boolean;
   rightTool: RightTool;
   rightSidebarWidth: number;
+  explorerWidth?: number;
   markdownPreviewWidth?: number;
   treeScrollTop: number;
   markdownEditMode: MarkdownEditMode;
@@ -412,6 +416,14 @@ type WorkspaceSearchStatus = "idle" | "searching" | "previewing" | "applying" | 
 type WorkspaceSearchAction = "search" | "preview" | "apply";
 type RenderWhitespaceMode = "none" | "selection" | "all";
 type SettingsSection = "appearance" | "editor" | "keybindings" | "workspace" | "system" | "search" | "about";
+type AppUpdateStatus = "idle" | "checking" | "latest" | "available" | "installing" | "failed" | "unsupported";
+type HorizontalResizeState = {
+  pointerId: number;
+  frameId: number;
+  latestClientX: number;
+  anchorX: number;
+  maxWidth: number;
+};
 type FontMode = "preset" | "custom";
 type ShellFontPreset = "system" | "segoe" | "yahei" | "dengxian" | "sourceHanSans" | "misans";
 type EditorFontPreset = "cascadia" | "jetbrains" | "consolas" | "firaCode" | "sourceCodePro";
@@ -677,6 +689,11 @@ const DEFAULT_SHELL_FONT_PRESET: ShellFontPreset = "system";
 const DEFAULT_EDITOR_FONT_PRESET: EditorFontPreset = "cascadia";
 const DEFAULT_SHELL_FONT_SIZE = 14;
 const DEFAULT_EDITOR_FONT_SIZE = 14;
+const DEFAULT_EXPLORER_WIDTH = 272;
+const MIN_EXPLORER_WIDTH = 180;
+const MAX_EXPLORER_WIDTH = 640;
+const MIN_WORKSPACE_EDITOR_WIDTH = 320;
+const EXPLORER_RESIZE_WIDTH = 6;
 
 const SHELL_FONT_STACKS: Record<ShellFontPreset, string> = {
   system: '"Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif',
@@ -784,6 +801,7 @@ const state = {
   defaultAppCandidateBusy: false,
   rightTool: "search" as RightTool,
   rightSidebarWidth: 420,
+  explorerWidth: DEFAULT_EXPLORER_WIDTH,
   markdownPreviewWidth: 0,
   busyMessage: "",
   keybindingHint: "",
@@ -820,8 +838,15 @@ let openRequestTask: Promise<void> = Promise.resolve();
 let fileDropTask: Promise<void> = Promise.resolve();
 let openRequestsReady = false;
 let titlebarMaximizeToggleAt = 0;
-let rightSidebarResizeState: { pointerId: number } | null = null;
-let markdownPreviewResizeState: { pointerId: number } | null = null;
+let rightSidebarResizeState: HorizontalResizeState | null = null;
+let explorerResizeState: HorizontalResizeState | null = null;
+let markdownPreviewResizeState: HorizontalResizeState | null = null;
+let editorLayoutFrame = 0;
+let editorLayoutSettleFrame = 0;
+let editorLayoutForceRender = false;
+let editorLayoutWidth = -1;
+let editorLayoutHeight = -1;
+let editorLayoutFrozen = false;
 let markdownPreviewTimer = 0;
 let markdownPreviewRenderVersion = 0;
 let markdownModelSyncTimer = 0;
@@ -836,6 +861,10 @@ let markdownEditorDocumentId = 0;
 let markdownSyncingFromEditor = false;
 let markdownImageObserver: MutationObserver | null = null;
 let markdownImageRefreshFrame = 0;
+let appVersion = "—";
+let appUpdateStatus: AppUpdateStatus = "idle";
+let appUpdateDetail = "尚未检查更新";
+let pendingAppUpdate: Update | null = null;
 
 type MarkdownEditorCacheEntry = {
   documentId: number;
@@ -1171,7 +1200,7 @@ function bootstrap() {
   activeSearchDecoration = editor.createDecorationsCollection();
   bookmarkDecorations = editor.createDecorationsCollection();
   editor.onDidScrollChange(syncMarkdownPreviewScroll);
-  const editorResizeObserver = new ResizeObserver(() => requestEditorLayout());
+  const editorResizeObserver = new ResizeObserver(() => requestEditorLayout(!paneResizeActive()));
   editorResizeObserver.observe($("editor"));
   registerAppCommands();
   bindKeybindings();
@@ -1180,11 +1209,13 @@ function bootstrap() {
   bindFileDrop();
   bindWindowControls();
   bindWindowCloseGuard();
+  bindExplorerResize();
   bindRightSidebarResize();
   bindMarkdownPreviewResize();
   bindOutsideDismissal();
   setFindView("find", false);
   renderAll();
+  void initializeAppUpdate();
   // First paint can run before grid tracks resolve; force layout so Monaco is not 0×0.
   requestEditorLayout();
   void restoreSession()
@@ -1821,6 +1852,8 @@ function bindActions() {
       $("commandPalette").classList.add("hidden");
     }
   });
+  $("settingsCheckUpdateButton").addEventListener("click", () => void checkForAppUpdate(true));
+  $("settingsInstallUpdateButton").addEventListener("click", () => void installAppUpdate());
 
   editor.onDidChangeCursorPosition(renderChrome);
 }
@@ -2082,6 +2115,125 @@ function selectSettingsSection(section: SettingsSection) {
   if (section === "system") void refreshSystemIntegrationStatus();
 }
 
+async function initializeAppUpdate() {
+  try {
+    appVersion = await getVersion();
+    appUpdateDetail = `当前版本 ${appVersion}`;
+  } catch (error) {
+    appUpdateStatus = "unsupported";
+    appUpdateDetail = "当前环境无法读取应用版本";
+    log(`读取应用版本失败：${error instanceof Error ? error.message : String(error)}`);
+    renderAppUpdateStatus();
+    return;
+  }
+
+  renderAppUpdateStatus();
+  if (import.meta.env.DEV) {
+    appUpdateStatus = "unsupported";
+    appUpdateDetail = `当前版本 ${appVersion} · 开发模式不检查更新`;
+    renderAppUpdateStatus();
+    return;
+  }
+
+  window.setTimeout(() => void checkForAppUpdate(false), 1800);
+}
+
+async function checkForAppUpdate(manual: boolean) {
+  if (appUpdateStatus === "checking" || appUpdateStatus === "installing") return;
+  appUpdateStatus = "checking";
+  appUpdateDetail = manual ? "正在连接 GitHub 检查更新" : `当前版本 ${appVersion} · 正在检查更新`;
+  renderAppUpdateStatus();
+
+  try {
+    const update = await check({ timeout: 30_000 });
+    if (!update) {
+      pendingAppUpdate = null;
+      appUpdateStatus = "latest";
+      appUpdateDetail = `当前版本 ${appVersion} 已是最新版`;
+      renderAppUpdateStatus();
+      return;
+    }
+
+    pendingAppUpdate = update;
+    appUpdateStatus = "available";
+    appUpdateDetail = `发现新版本 ${update.version}，当前版本 ${update.currentVersion}`;
+    renderAppUpdateStatus();
+
+    if (!manual) {
+      const confirmed = await askConfirm({
+        title: "发现新版本",
+        subtitle: `Notra ${update.version} 已发布`,
+        body: `当前版本 ${update.currentVersion}，是否现在下载并安装新版本？`,
+        okLabel: "下载并安装",
+        cancelLabel: "稍后",
+      });
+      if (confirmed) await installAppUpdate();
+    }
+  } catch (error) {
+    appUpdateStatus = "failed";
+    appUpdateDetail = manual ? "检查更新失败，请稍后重试" : `当前版本 ${appVersion} · 自动检查失败`;
+    log(`检查更新失败：${error instanceof Error ? error.message : String(error)}`);
+    renderAppUpdateStatus();
+  }
+}
+
+async function installAppUpdate() {
+  if (!pendingAppUpdate || appUpdateStatus === "installing") return;
+  appUpdateStatus = "installing";
+  appUpdateDetail = `正在准备下载 Notra ${pendingAppUpdate.version}`;
+  renderAppUpdateStatus();
+
+  let downloadedBytes = 0;
+  let totalBytes = 0;
+  try {
+    await pendingAppUpdate.downloadAndInstall((event) => {
+      if (event.event === "Started") {
+        totalBytes = event.data.contentLength ?? 0;
+        appUpdateDetail = `正在下载 Notra ${pendingAppUpdate?.version ?? "新版本"}`;
+      } else if (event.event === "Progress") {
+        downloadedBytes += event.data.chunkLength;
+        appUpdateDetail = totalBytes > 0
+          ? `正在下载 Notra ${pendingAppUpdate?.version ?? "新版本"} · ${Math.min(100, Math.round(downloadedBytes / totalBytes * 100))}%`
+          : `正在下载 Notra ${pendingAppUpdate?.version ?? "新版本"}`;
+      } else {
+        appUpdateDetail = "安装完成，正在重新启动";
+      }
+      renderAppUpdateStatus();
+    });
+    await relaunch();
+  } catch (error) {
+    appUpdateStatus = "failed";
+    appUpdateDetail = "下载安装失败，请稍后重试";
+    log(`下载安装更新失败：${error instanceof Error ? error.message : String(error)}`);
+    renderAppUpdateStatus();
+  }
+}
+
+function renderAppUpdateStatus() {
+  const statusLabels: Record<AppUpdateStatus, string> = {
+    idle: "未检查",
+    checking: "检查中",
+    latest: "已是最新",
+    available: "有新版本",
+    installing: "安装中",
+    failed: "检查失败",
+    unsupported: "不可用",
+  };
+  const statusElement = $("settingsUpdateStatus");
+  const checkButton = $<HTMLButtonElement>("settingsCheckUpdateButton");
+  const installButton = $<HTMLButtonElement>("settingsInstallUpdateButton");
+  $("settingsAppVersion").textContent = appVersion;
+  $("settingsProductVersion").textContent = `v${appVersion}`;
+  $("settingsUpdateDetail").textContent = appUpdateDetail;
+  statusElement.textContent = statusLabels[appUpdateStatus];
+  statusElement.classList.toggle("enabled", appUpdateStatus === "latest" || appUpdateStatus === "available");
+  statusElement.classList.toggle("unsupported", appUpdateStatus === "unsupported" || appUpdateStatus === "failed");
+  checkButton.disabled = appUpdateStatus === "checking" || appUpdateStatus === "installing" || appUpdateStatus === "unsupported";
+  checkButton.textContent = appUpdateStatus === "checking" ? "检查中" : "检查更新";
+  installButton.classList.toggle("hidden", appUpdateStatus !== "available");
+  installButton.disabled = appUpdateStatus !== "available";
+}
+
 async function refreshSystemIntegrationStatus() {
   await Promise.all([refreshShellIntegrationStatus(), refreshDefaultAppCandidateStatus()]);
 }
@@ -2334,30 +2486,191 @@ function toggleTitlebarMaximize() {
   void appWindow.toggleMaximize();
 }
 
+function bindExplorerResize() {
+  const handle = $("explorerResize");
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    const workspace = $("workspace");
+    const workspaceRect = workspace.getBoundingClientRect();
+    const railWidth = $("activityRail").getBoundingClientRect().width;
+    const resize: HorizontalResizeState = {
+      pointerId: event.pointerId,
+      frameId: 0,
+      latestClientX: event.clientX,
+      anchorX: workspaceRect.left + railWidth,
+      maxWidth: maxExplorerWidth(workspace.clientWidth, railWidth),
+    };
+    explorerResizeState = resize;
+    freezeEditorLayoutForPaneResize();
+    document.body.classList.add("resizing-explorer");
+    event.preventDefault();
+
+    const applyResize = (clientX: number) => {
+      setExplorerWidth(clientX - resize.anchorX, resize.maxWidth, true);
+    };
+    const moveResize = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== resize.pointerId) return;
+      scheduleHorizontalResize(resize, pointerEvent.clientX, applyResize);
+    };
+    const stopResize = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== resize.pointerId) return;
+      flushHorizontalResize(
+        resize,
+        pointerEvent.type === "pointerup" ? pointerEvent.clientX : resize.latestClientX,
+        applyResize,
+      );
+      explorerResizeState = null;
+      document.body.classList.remove("resizing-explorer");
+      window.removeEventListener("pointermove", moveResize);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      applyExplorerWidth(true, resize.maxWidth);
+      releaseEditorLayoutAfterPaneResize();
+      scheduleSessionSave();
+    };
+    window.addEventListener("pointermove", moveResize);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    setExplorerWidth(state.explorerWidth + (event.key === "ArrowLeft" ? -20 : 20));
+    scheduleSessionSave();
+  });
+  handle.addEventListener("dblclick", () => {
+    setExplorerWidth(DEFAULT_EXPLORER_WIDTH);
+    scheduleSessionSave();
+  });
+  window.addEventListener("resize", () => applyExplorerWidth());
+}
+
+function setExplorerWidth(width: number, maxWidth = maxExplorerWidth(), fast = false) {
+  state.explorerWidth = clampExplorerWidth(width, maxWidth);
+  applyExplorerWidth(fast, maxWidth);
+}
+
+function applyExplorerWidth(fast = false, maxWidth = maxExplorerWidth()) {
+  state.explorerWidth = clampExplorerWidth(state.explorerWidth, maxWidth);
+  const workspace = $("workspace");
+  const handle = $("explorerResize");
+  workspace.style.setProperty("--explorer-width", `${state.explorerWidth}px`);
+  handle.setAttribute("aria-valuenow", String(state.explorerWidth));
+  handle.setAttribute("aria-valuemax", String(maxWidth));
+  if (!editorLayoutFrozen) requestEditorLayout(!fast);
+}
+
+function clampExplorerWidth(width: number, maxWidth = maxExplorerWidth()) {
+  return Math.min(maxWidth, Math.max(MIN_EXPLORER_WIDTH, Math.round(width)));
+}
+
+function maxExplorerWidth(workspaceWidth = $("workspace").clientWidth, railWidth = $("activityRail").getBoundingClientRect().width) {
+  const available = workspaceWidth - railWidth - MIN_WORKSPACE_EDITOR_WIDTH - EXPLORER_RESIZE_WIDTH;
+  return Math.min(MAX_EXPLORER_WIDTH, Math.max(MIN_EXPLORER_WIDTH, Math.floor(available)));
+}
+
+function scheduleHorizontalResize(resize: HorizontalResizeState, clientX: number, apply: (clientX: number) => void) {
+  resize.latestClientX = clientX;
+  if (resize.frameId !== 0) return;
+  resize.frameId = window.requestAnimationFrame(() => {
+    resize.frameId = 0;
+    apply(resize.latestClientX);
+  });
+}
+
+function flushHorizontalResize(resize: HorizontalResizeState, clientX: number, apply: (clientX: number) => void) {
+  if (resize.frameId !== 0) {
+    window.cancelAnimationFrame(resize.frameId);
+    resize.frameId = 0;
+  }
+  resize.latestClientX = clientX;
+  apply(clientX);
+}
+
+function paneResizeActive() {
+  return Boolean(explorerResizeState || rightSidebarResizeState || markdownPreviewResizeState);
+}
+
+function freezeEditorLayoutForPaneResize() {
+  if (editorLayoutFrozen) return;
+  const area = $<HTMLElement>("editorArea");
+  const editorWrap = area.querySelector<HTMLElement>(".editor-wrap");
+  if (!editorWrap) return;
+  cancelPendingEditorLayout();
+  editorLayoutFrozen = true;
+  if (area.classList.contains("preview-open") && !$("markdownPreview").classList.contains("hidden")) {
+    const editorWidth = editorWrap.getBoundingClientRect().width;
+    const resizeWidth = $("markdownPreviewResize").getBoundingClientRect().width;
+    const previewWidth = $("markdownPreview").getBoundingClientRect().width;
+    area.style.gridTemplateColumns = `${editorWidth}px ${resizeWidth}px ${previewWidth}px`;
+    return;
+  }
+  area.style.gridTemplateColumns = `${area.getBoundingClientRect().width}px`;
+}
+
+function releaseEditorLayoutAfterPaneResize() {
+  if (!editorLayoutFrozen) {
+    requestEditorLayout();
+    return;
+  }
+  $("editorArea").style.removeProperty("grid-template-columns");
+  editorLayoutFrozen = false;
+  editorLayoutWidth = -1;
+  editorLayoutHeight = -1;
+  requestEditorLayout();
+}
+
+function cancelPendingEditorLayout() {
+  if (editorLayoutFrame !== 0) window.cancelAnimationFrame(editorLayoutFrame);
+  if (editorLayoutSettleFrame !== 0) window.cancelAnimationFrame(editorLayoutSettleFrame);
+  editorLayoutFrame = 0;
+  editorLayoutSettleFrame = 0;
+  editorLayoutForceRender = false;
+}
+
 function bindRightSidebarResize() {
   const handle = $("rightSidebarResize");
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    rightSidebarResizeState = { pointerId: event.pointerId };
+    const resize: HorizontalResizeState = {
+      pointerId: event.pointerId,
+      frameId: 0,
+      latestClientX: event.clientX,
+      anchorX: window.innerWidth,
+      maxWidth: Math.max(320, Math.floor(window.innerWidth * 0.55)),
+    };
+    rightSidebarResizeState = resize;
+    freezeEditorLayoutForPaneResize();
     document.body.classList.add("resizing-sidebar");
-    handle.setPointerCapture(event.pointerId);
     event.preventDefault();
+
+    const applyResize = (clientX: number) => {
+      setRightSidebarWidth(resize.anchorX - clientX, resize.maxWidth, true);
+    };
+    const moveResize = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== resize.pointerId) return;
+      scheduleHorizontalResize(resize, pointerEvent.clientX, applyResize);
+    };
+    const stopResize = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== resize.pointerId) return;
+      flushHorizontalResize(
+        resize,
+        pointerEvent.type === "pointerup" ? pointerEvent.clientX : resize.latestClientX,
+        applyResize,
+      );
+      rightSidebarResizeState = null;
+      document.body.classList.remove("resizing-sidebar");
+      window.removeEventListener("pointermove", moveResize);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      positionOpenSearchHistoryMenu();
+      releaseEditorLayoutAfterPaneResize();
+      scheduleSessionSave();
+    };
+    window.addEventListener("pointermove", moveResize);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
   });
-  handle.addEventListener("pointermove", (event) => {
-    if (!rightSidebarResizeState || event.pointerId !== rightSidebarResizeState.pointerId) return;
-    setRightSidebarWidth(window.innerWidth - event.clientX);
-  });
-  const stopDrag = (event: PointerEvent) => {
-    if (rightSidebarResizeState?.pointerId !== event.pointerId) return;
-    rightSidebarResizeState = null;
-    document.body.classList.remove("resizing-sidebar");
-    if (handle.hasPointerCapture(event.pointerId)) {
-      handle.releasePointerCapture(event.pointerId);
-    }
-    scheduleSessionSave();
-  };
-  handle.addEventListener("pointerup", stopDrag);
-  handle.addEventListener("pointercancel", stopDrag);
   handle.addEventListener("keydown", (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
@@ -2368,12 +2681,15 @@ function bindRightSidebarResize() {
   window.addEventListener("resize", positionOpenSearchHistoryMenu);
 }
 
-function setRightSidebarWidth(width: number) {
-  const maxWidth = Math.max(320, Math.floor(window.innerWidth * 0.55));
+function setRightSidebarWidth(
+  width: number,
+  maxWidth = Math.max(320, Math.floor(window.innerWidth * 0.55)),
+  fast = false,
+) {
   state.rightSidebarWidth = Math.min(maxWidth, Math.max(320, Math.round(width)));
   $("app").style.setProperty("--right-sidebar-width", `${state.rightSidebarWidth}px`);
-  positionOpenSearchHistoryMenu();
-  requestEditorLayout();
+  if (!fast) positionOpenSearchHistoryMenu();
+  if (!editorLayoutFrozen) requestEditorLayout(!fast);
 }
 
 function bindWindowCloseGuard() {
@@ -4481,25 +4797,45 @@ function bindMarkdownPreviewResize() {
   const handle = $("markdownPreviewResize");
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
-    markdownPreviewResizeState = { pointerId: event.pointerId };
+    const area = $<HTMLElement>("editorArea");
+    const areaRect = area.getBoundingClientRect();
+    const resize: HorizontalResizeState = {
+      pointerId: event.pointerId,
+      frameId: 0,
+      latestClientX: event.clientX,
+      anchorX: areaRect.right,
+      maxWidth: Math.max(280, area.clientWidth - 288),
+    };
+    markdownPreviewResizeState = resize;
     document.body.classList.add("resizing-markdown-preview");
-    handle.setPointerCapture(event.pointerId);
     event.preventDefault();
+
+    const applyResize = (clientX: number) => {
+      setMarkdownPreviewWidth(resize.anchorX - clientX, resize.maxWidth, true);
+    };
+    const moveResize = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== resize.pointerId) return;
+      scheduleHorizontalResize(resize, pointerEvent.clientX, applyResize);
+    };
+    const stopResize = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== resize.pointerId) return;
+      flushHorizontalResize(
+        resize,
+        pointerEvent.type === "pointerup" ? pointerEvent.clientX : resize.latestClientX,
+        applyResize,
+      );
+      markdownPreviewResizeState = null;
+      document.body.classList.remove("resizing-markdown-preview");
+      window.removeEventListener("pointermove", moveResize);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+      applyMarkdownPreviewWidth(false, resize.maxWidth);
+      scheduleSessionSave();
+    };
+    window.addEventListener("pointermove", moveResize);
+    window.addEventListener("pointerup", stopResize);
+    window.addEventListener("pointercancel", stopResize);
   });
-  handle.addEventListener("pointermove", (event) => {
-    if (!markdownPreviewResizeState || event.pointerId !== markdownPreviewResizeState.pointerId) return;
-    const area = $<HTMLElement>("editorArea").getBoundingClientRect();
-    setMarkdownPreviewWidth(area.right - event.clientX);
-  });
-  const stopDrag = (event: PointerEvent) => {
-    if (markdownPreviewResizeState?.pointerId !== event.pointerId) return;
-    markdownPreviewResizeState = null;
-    document.body.classList.remove("resizing-markdown-preview");
-    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
-    scheduleSessionSave();
-  };
-  handle.addEventListener("pointerup", stopDrag);
-  handle.addEventListener("pointercancel", stopDrag);
   handle.addEventListener("keydown", (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
     event.preventDefault();
@@ -4512,31 +4848,30 @@ function bindMarkdownPreviewResize() {
     applyMarkdownPreviewWidth();
     scheduleSessionSave();
   });
-  window.addEventListener("resize", applyMarkdownPreviewWidth);
+  window.addEventListener("resize", () => applyMarkdownPreviewWidth());
 }
 
-function setMarkdownPreviewWidth(width: number) {
-  const area = $<HTMLElement>("editorArea");
+function setMarkdownPreviewWidth(width: number, maxWidth?: number, fast = false) {
   const minWidth = 280;
-  const maxWidth = Math.max(minWidth, area.clientWidth - minWidth - 8);
-  state.markdownPreviewWidth = Math.min(maxWidth, Math.max(minWidth, Math.round(width)));
-  applyMarkdownPreviewWidth();
+  const resolvedMaxWidth = maxWidth ?? Math.max(minWidth, $<HTMLElement>("editorArea").clientWidth - minWidth - 8);
+  state.markdownPreviewWidth = Math.min(resolvedMaxWidth, Math.max(minWidth, Math.round(width)));
+  applyMarkdownPreviewWidth(fast, resolvedMaxWidth);
 }
 
-function applyMarkdownPreviewWidth() {
+function applyMarkdownPreviewWidth(fast = false, maxWidth?: number) {
   const area = $<HTMLElement>("editorArea");
+  const resolvedMaxWidth = maxWidth ?? Math.max(280, area.clientWidth - 288);
   if (state.markdownPreviewWidth > 0) {
     const minWidth = 280;
-    const maxWidth = Math.max(minWidth, area.clientWidth - minWidth - 8);
-    state.markdownPreviewWidth = Math.min(maxWidth, Math.max(minWidth, state.markdownPreviewWidth));
+    state.markdownPreviewWidth = Math.min(resolvedMaxWidth, Math.max(minWidth, state.markdownPreviewWidth));
     area.style.setProperty("--markdown-preview-width", `${state.markdownPreviewWidth}px`);
   } else {
     area.style.removeProperty("--markdown-preview-width");
   }
   const handle = $("markdownPreviewResize");
-  handle.setAttribute("aria-valuemax", String(Math.max(280, area.clientWidth - 288)));
-  handle.setAttribute("aria-valuenow", String(Math.round(currentMarkdownPreviewWidth())));
-  requestEditorLayout();
+  handle.setAttribute("aria-valuemax", String(resolvedMaxWidth));
+  handle.setAttribute("aria-valuenow", String(Math.round(state.markdownPreviewWidth || currentMarkdownPreviewWidth())));
+  requestEditorLayout(!fast);
 }
 
 function currentMarkdownPreviewWidth() {
@@ -4885,6 +5220,7 @@ function renderSettingsMenu() {
   setSegmentedValue("settingsMarkdownWidthControl", state.markdownContentWidth);
   setSegmentedValue("settingsMarkdownControl", state.markdownEditMode);
   setSegmentedValue("settingsModeControl", state.mode === "workspace" && state.workspace ? "workspace" : "single");
+  renderAppUpdateStatus();
   $("keymapProfileDetail").textContent = keymapProfileDetail();
   const integrationStatus = $("settingsShellIntegrationStatus");
   const integrationButton = $<HTMLButtonElement>("settingsShellIntegrationButton");
@@ -5345,10 +5681,12 @@ function resetEditorView() {
   state.editorFontPreset = DEFAULT_EDITOR_FONT_PRESET;
   state.editorFontCustom = EDITOR_FONT_STACKS[DEFAULT_EDITOR_FONT_PRESET];
   state.markdownContentWidth = "typora";
+  state.explorerWidth = DEFAULT_EXPLORER_WIDTH;
   state.markdownPreviewWidth = 0;
   applyShellFontSettings();
   applyEditorSettings();
   applyMarkdownContentWidth();
+  applyExplorerWidth();
   applyMarkdownPreviewWidth();
   renderAll();
   scheduleSessionSave();
@@ -6165,19 +6503,39 @@ function scheduleMarkdownPreviewRender() {
   markdownPreviewTimer = window.setTimeout(() => void renderMarkdownPreview(), 100);
 }
 
-function requestEditorLayout() {
-  window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => {
-      const container = $("editor");
-      const rect = container.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) {
-        editor?.layout({ width: Math.floor(rect.width), height: Math.floor(rect.height) });
-      } else {
-        editor?.layout();
-      }
-      editor?.render(true);
-    });
+function requestEditorLayout(forceRender = true) {
+  editorLayoutForceRender ||= forceRender;
+  if (editorLayoutFrame !== 0 || editorLayoutSettleFrame !== 0) return;
+  editorLayoutFrame = window.requestAnimationFrame(() => {
+    editorLayoutFrame = 0;
+    if (editorLayoutForceRender) {
+      editorLayoutSettleFrame = window.requestAnimationFrame(runEditorLayout);
+      return;
+    }
+    runEditorLayout();
   });
+}
+
+function runEditorLayout() {
+  editorLayoutSettleFrame = 0;
+  const forceRender = editorLayoutForceRender;
+  editorLayoutForceRender = false;
+  const container = $("editor");
+  const rect = container.getBoundingClientRect();
+  const width = Math.floor(rect.width);
+  const height = Math.floor(rect.height);
+  if (width > 0 && height > 0) {
+    if (forceRender || width !== editorLayoutWidth || height !== editorLayoutHeight) {
+      editor?.layout({ width, height });
+      editorLayoutWidth = width;
+      editorLayoutHeight = height;
+    }
+  } else if (forceRender) {
+    editor?.layout();
+    editorLayoutWidth = -1;
+    editorLayoutHeight = -1;
+  }
+  if (forceRender) editor?.render(true);
 }
 
 function restoreEditorSurface() {
@@ -7335,12 +7693,16 @@ async function restoreSession() {
     state.mode = snapshot.workMode ?? (snapshot.workspaceRoot ? "workspace" : "single");
     state.rightTool = snapshot.rightTool === "outline" ? "outline" : "search";
     state.rightSidebarWidth = snapshot.rightSidebarWidth ?? state.rightSidebarWidth;
+    state.explorerWidth = Number.isFinite(snapshot.explorerWidth)
+      ? snapshot.explorerWidth ?? DEFAULT_EXPLORER_WIDTH
+      : DEFAULT_EXPLORER_WIDTH;
     state.markdownPreviewWidth = Number.isFinite(snapshot.markdownPreviewWidth)
       ? Math.max(0, snapshot.markdownPreviewWidth ?? 0)
       : 0;
     state.contextMenuEnabled = snapshot.contextMenuEnabled ?? true;
     state.defaultAppCandidateEnabled = snapshot.defaultAppCandidateEnabled ?? true;
     setRightSidebarWidth(state.rightSidebarWidth);
+    applyExplorerWidth();
     applyMarkdownPreviewWidth();
     state.markdownEditMode = isMarkdownEditMode(snapshot.markdownEditMode)
       ? snapshot.markdownEditMode
@@ -7620,6 +7982,7 @@ async function saveSession() {
     rightSidebarOpen: !$("findPopover").classList.contains("hidden"),
     rightTool: state.rightTool,
     rightSidebarWidth: state.rightSidebarWidth,
+    explorerWidth: state.explorerWidth,
     markdownPreviewWidth: state.markdownPreviewWidth,
     treeScrollTop: $("tree").scrollTop,
     markdownEditMode: state.markdownEditMode,

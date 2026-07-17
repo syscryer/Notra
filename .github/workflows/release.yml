@@ -84,6 +84,17 @@ jobs:
         working-directory: crates/notra-app/frontend
         run: npm ci
 
+      - name: Validate updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not configured"
+            exit 1
+          fi
+
       - name: Validate release version
         shell: pwsh
         env:
@@ -100,6 +111,12 @@ jobs:
 
           if (-not $appPackage -or -not $corePackage) {
             Write-Host "::error::Cargo metadata does not contain notra-app and notra-core"
+            exit 1
+          }
+
+          $customProtocol = $appPackage.features.'custom-protocol'
+          if (-not $customProtocol -or $customProtocol -notcontains 'tauri/custom-protocol') {
+            Write-Host "::error::notra-app must declare custom-protocol = ['tauri/custom-protocol']"
             exit 1
           }
 
@@ -135,7 +152,9 @@ jobs:
 
       - name: Build platform bundles
         working-directory: crates/notra-app
-        run: cargo tauri build ${{ matrix.build_args }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: cargo tauri build ${{ matrix.build_args }} --features custom-protocol
 
       - name: Collect release assets
         shell: bash
@@ -163,6 +182,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Download platform artifacts
         uses: actions/download-artifact@v4
         with:
@@ -176,8 +200,10 @@ jobs:
 
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF_NAME#v}"
+            release_tag="${GITHUB_REF_NAME}"
           else
             version="$(jq -r '.version' crates/notra-app/tauri.conf.json)"
+            release_tag="v${version}"
             echo "Manual validation mode: assets will be prepared for v${version}, but no GitHub Release will be created."
           fi
 
@@ -186,6 +212,7 @@ jobs:
           find downloaded-assets -maxdepth 1 -type f -exec cp {} release-assets/ \;
           git archive --format=zip --prefix="$prefix" -o "release-assets/notra-${version}-source.zip" HEAD
           git archive --format=tar --prefix="$prefix" HEAD | gzip -9 > "release-assets/notra-${version}-source.tar.gz"
+          node scripts/generate-latest-json.mjs release-assets "syscryer/Notra" "$release_tag" "$version"
 
           (
             cd release-assets

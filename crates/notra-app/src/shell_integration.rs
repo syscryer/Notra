@@ -14,19 +14,44 @@ pub struct ShellIntegrationStatus {
 }
 
 pub fn status() -> Result<ShellIntegrationStatus, String> {
+    if !production_system_integration_enabled() {
+        return Ok(development_status(SHELL_MENU_LABEL));
+    }
     platform::context_menu_status()
 }
 
 pub fn set_enabled(enabled: bool) -> Result<ShellIntegrationStatus, String> {
+    if !production_system_integration_enabled() {
+        return Ok(development_status(SHELL_MENU_LABEL));
+    }
     platform::set_context_menu_enabled(enabled)
 }
 
 pub fn default_app_status() -> Result<ShellIntegrationStatus, String> {
+    if !production_system_integration_enabled() {
+        return Ok(development_status(DEFAULT_APP_LABEL));
+    }
     platform::default_app_status()
 }
 
 pub fn set_default_app_enabled(enabled: bool) -> Result<ShellIntegrationStatus, String> {
+    if !production_system_integration_enabled() {
+        return Ok(development_status(DEFAULT_APP_LABEL));
+    }
     platform::set_default_app_enabled(enabled)
+}
+
+fn production_system_integration_enabled() -> bool {
+    cfg!(feature = "custom-protocol")
+}
+
+fn development_status(label: &str) -> ShellIntegrationStatus {
+    ShellIntegrationStatus {
+        supported: false,
+        enabled: false,
+        label: label.to_owned(),
+        detail: "开发模式不会修改 Windows 系统集成，请使用安装版本配置".to_owned(),
+    }
 }
 
 fn shell_command(executable: &Path) -> String {
@@ -471,6 +496,15 @@ mod tests {
             shell_command(&executable),
             r#""C:\Program Files\Notra\notra.exe" "%1""#
         );
+    }
+
+    #[cfg(not(feature = "custom-protocol"))]
+    #[test]
+    fn development_build_does_not_enable_system_integration() {
+        let status = status().expect("development status");
+        assert!(!status.supported);
+        assert!(!status.enabled);
+        assert!(status.detail.contains("开发模式"));
     }
 
     #[cfg(target_os = "windows")]

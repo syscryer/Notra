@@ -675,10 +675,12 @@ select:focus-visible {
 }
 
 .workspace {
+  --explorer-width: 272px;
+  --explorer-resize-width: 6px;
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-columns: 44px 272px minmax(0, 1fr);
+  grid-template-columns: 44px var(--explorer-width) var(--explorer-resize-width) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
   background: var(--editor);
@@ -689,7 +691,8 @@ select:focus-visible {
 }
 
 .workspace.single-mode .activity-rail,
-.workspace.single-mode .explorer {
+.workspace.single-mode .explorer,
+.workspace.single-mode .explorer-resize {
   display: none;
 }
 
@@ -697,7 +700,8 @@ select:focus-visible {
   grid-template-columns: 44px minmax(0, 1fr);
 }
 
-.workspace.panel-collapsed .explorer {
+.workspace.panel-collapsed .explorer,
+.workspace.panel-collapsed .explorer-resize {
   display: none;
 }
 
@@ -724,11 +728,42 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  border-right: 1px solid var(--line);
+  contain: layout paint;
   background: var(--surface);
   display: grid;
   grid-template-rows: 42px minmax(0, 1fr);
   overflow: hidden;
+}
+
+.explorer-resize {
+  position: relative;
+  z-index: 5;
+  min-width: var(--explorer-resize-width);
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  background: var(--editor);
+}
+
+.explorer-resize::after {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 1px;
+  background: var(--line);
+}
+
+.explorer-resize:hover::after,
+.explorer-resize:focus-visible::after,
+.resizing-explorer .explorer-resize::after {
+  width: 2px;
+  background: var(--primary);
+}
+
+.resizing-explorer,
+.resizing-explorer * {
+  cursor: col-resize !important;
+  user-select: none !important;
 }
 
 .explorer-head {
@@ -910,6 +945,7 @@ select:focus-visible {
   min-width: 0;
   min-height: 0;
   height: 100%;
+  contain: layout paint;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
@@ -3787,6 +3823,10 @@ tbody tr.result-active {
   .keybinding-row {
     grid-template-columns: minmax(0, 1fr) minmax(150px, 210px) 72px;
   }
+}
+
+.settings-update-control {
+  flex-wrap: wrap;
 }
 
 @media (max-width: 720px) {

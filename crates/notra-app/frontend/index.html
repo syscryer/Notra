@@ -208,6 +208,8 @@
           <div class="explorer-body" id="tree"></div>
         </aside>
 
+        <div class="explorer-resize" id="explorerResize" role="separator" aria-orientation="vertical" aria-label="调整目录宽度" aria-valuemin="180" aria-valuemax="640" aria-valuenow="272" tabindex="0"></div>
+
         <section class="editor-area" id="editorArea">
           <div class="editor-wrap">
             <div class="current-find-dock hidden" id="currentFindDock">
@@ -324,7 +326,7 @@
             <img class="settings-product-mark" src="/icon.png" alt="" />
             <div>
               <strong>Notra</strong>
-              <span>v0.1.0</span>
+              <span id="settingsProductVersion">v—</span>
             </div>
           </footer>
         </aside>
@@ -666,7 +668,19 @@
                 <span class="settings-row-icon icon-slot" data-icon="FileText"></span>
                 <div>
                   <strong>版本</strong>
-                  <span>0.1.0</span>
+                  <span id="settingsAppVersion">—</span>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="RefreshCw"></span>
+                <div>
+                  <strong>软件更新</strong>
+                  <span id="settingsUpdateDetail">正在读取当前版本</span>
+                </div>
+                <div class="shell-integration-control settings-update-control">
+                  <span class="settings-status-pill" id="settingsUpdateStatus" aria-live="polite">准备中</span>
+                  <button class="settings-action" id="settingsCheckUpdateButton">检查更新</button>
+                  <button class="settings-action hidden" id="settingsInstallUpdateButton">下载安装</button>
                 </div>
               </div>
               <div class="settings-row static">

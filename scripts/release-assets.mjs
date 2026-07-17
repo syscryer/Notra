@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import path from "node:path";
 import process from "node:process";
-import { copyFile, mkdir, readdir } from "node:fs/promises";
+import { access, copyFile, mkdir, readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
 const compoundExtensions = [".app.tar.gz", ".tar.gz"];
@@ -80,6 +80,16 @@ export async function collectAndCopyReleaseAssets({ bundleRoot, outDir, artifact
     const destination = path.join(outDir, buildReleaseAssetName(path.basename(source), artifact));
     await copyFile(source, destination);
     copiedAssets.push({ source, destination });
+
+    const signatureSource = `${source}.sig`;
+    try {
+      await access(signatureSource);
+      const signatureDestination = `${destination}.sig`;
+      await copyFile(signatureSource, signatureDestination);
+      copiedAssets.push({ source: signatureSource, destination: signatureDestination });
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
   }
 
   return copiedAssets;

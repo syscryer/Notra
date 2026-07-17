@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import {
   classifyMermaidDiagramSize,
   createMermaidRenderConfig,
-  inheritMermaidSubgraphDirection,
   mergeMermaidClassTextBounds,
 } from '../vendor/marktext-muya/src/utils/diagram/mermaidCompat.ts';
 
@@ -18,70 +17,6 @@ assert.equal(classifyMermaidDiagramSize(diagramSvg('erDiagram'), 647, 1157), 'wi
 assert.equal(classifyMermaidDiagramSize(diagramSvg('erDiagram'), 1969, 3598), 'wide');
 assert.equal(classifyMermaidDiagramSize(diagramSvg('flowchart'), 400, 900), 'portrait');
 assert.equal(classifyMermaidDiagramSize(diagramSvg('flowchart'), 1200, 600), 'wide');
-
-const vertical = [
-  'flowchart TD',
-  '    subgraph ONE["场景一"]',
-  '        A --> B',
-  '    end',
-].join('\n');
-assert.equal(
-  inheritMermaidSubgraphDirection(vertical),
-  [
-    'flowchart TD',
-    '    subgraph ONE["场景一"]',
-    '        direction TB',
-    '        A --> B',
-    '    end',
-  ].join('\n'),
-);
-
-const explicit = [
-  'flowchart TD',
-  '    subgraph ONE',
-  '        direction LR',
-  '        A --> B',
-  '    end',
-].join('\n');
-assert.equal(inheritMermaidSubgraphDirection(explicit), explicit);
-
-const nested = [
-  'graph TB',
-  '    subgraph OUTER',
-  '        direction LR',
-  '        subgraph INNER',
-  '            A --> B',
-  '        end',
-  '    end',
-].join('\n');
-assert.equal(
-  inheritMermaidSubgraphDirection(nested),
-  [
-    'graph TB',
-    '    subgraph OUTER',
-    '        direction LR',
-    '        subgraph INNER',
-    '            direction LR',
-    '            A --> B',
-    '        end',
-    '    end',
-  ].join('\n'),
-);
-
-const nonFlowchart = 'sequenceDiagram\n    Alice->>Bob: Hello';
-assert.equal(inheritMermaidSubgraphDirection(nonFlowchart), nonFlowchart);
-
-const misleadingSequence = 'sequenceDiagram\n    Alice->>Bob: graph TD\n    subgraph text\n    end';
-assert.equal(inheritMermaidSubgraphDirection(misleadingSequence), misleadingSequence);
-
-const malformed = 'flowchart TD\n    subgraph OPEN\n        A --> B';
-assert.equal(inheritMermaidSubgraphDirection(malformed), malformed);
-
-const crlf = 'flowchart LR\r\nsubgraph ONE\r\nA --> B\r\nend\r\n';
-assert.equal(
-  inheritMermaidSubgraphDirection(crlf),
-  'flowchart LR\r\nsubgraph ONE\r\n    direction LR\r\nA --> B\r\nend\r\n',
-);
 
 assert.deepEqual(createMermaidRenderConfig('dark'), {
   startOnLoad: false,

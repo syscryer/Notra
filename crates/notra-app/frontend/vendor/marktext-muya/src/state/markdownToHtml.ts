@@ -8,7 +8,6 @@ import { isHTMLElement, sanitize, unescapeHTML } from '../utils';
 import loadRenderer from '../utils/diagram';
 import {
     createMermaidRenderConfig,
-    inheritMermaidSubgraphDirection,
     runMermaidWithCompatibility,
 } from '../utils/diagram/mermaidCompat';
 
@@ -47,7 +46,7 @@ export class MarkdownToHtml {
                 continue;
             const mermaidContainer = document.createElement('div');
             mermaidContainer.innerHTML = sanitize(
-                inheritMermaidSubgraphDirection(unescapeHTML(code.innerHTML)),
+                unescapeHTML(code.innerHTML),
                 EXPORT_DOMPURIFY_CONFIG,
                 true,
             ) as string;
