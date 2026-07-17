@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 1420",
     "build": "tsc && vite build",
     "test:keybindings": "node scripts/verify-keybindings.mjs",
+    "test:markdown": "node scripts/verify-mermaid-layout.mjs",
     "markdown:sync": "powershell -NoProfile -ExecutionPolicy Bypass -File ../../../scripts/sync-marktext-muya.ps1",
     "preview": "vite preview --host 127.0.0.1 --port 1420"
   },
@@ -15,7 +16,7 @@
     "@tauri-apps/api": "^2.9.0",
     "lucide": "^1.23.0",
     "marked": "^18.0.5",
-    "mermaid": "^11.15.0",
+    "mermaid": "^11.16.0",
     "monaco-editor": "0.53.0",
     "plantuml-encoder": "^1.4.0",
     "prismjs": "^1.30.0",

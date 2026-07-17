@@ -6,6 +6,11 @@ import exportStyle from '../assets/styles/exportStyle.css?inline';
 import { EXPORT_DOMPURIFY_CONFIG } from '../config';
 import { isHTMLElement, sanitize, unescapeHTML } from '../utils';
 import loadRenderer from '../utils/diagram';
+import {
+    createMermaidRenderConfig,
+    inheritMermaidSubgraphDirection,
+    runMermaidWithCompatibility,
+} from '../utils/diagram/mermaidCompat';
 
 import { getHighlightHtml } from '../utils/marked';
 import { generateGithubSlug } from '../utils/slug';
@@ -42,7 +47,7 @@ export class MarkdownToHtml {
                 continue;
             const mermaidContainer = document.createElement('div');
             mermaidContainer.innerHTML = sanitize(
-                unescapeHTML(code.innerHTML),
+                inheritMermaidSubgraphDirection(unescapeHTML(code.innerHTML)),
                 EXPORT_DOMPURIFY_CONFIG,
                 true,
             ) as string;
@@ -54,28 +59,27 @@ export class MarkdownToHtml {
             return;
 
         const mermaid = await loadRenderer('mermaid');
-        // We only export light theme, so set mermaid theme to `default`, in the future, we can choose which theme to export.
-        mermaid.initialize({
-            startOnLoad: false,
-            securityLevel: 'strict',
-            theme: 'default',
-        });
         // Render each diagram in isolation: `mermaid.run` rejects the whole
         // batch on the first parse error, so one invalid diagram used to abort
         // the entire export (#4812). Contain the failure to that diagram and
         // fall back to the same placeholder the other diagram renderers use.
         for (const node of nodes) {
             try {
-                await mermaid.run({ nodes: [node] });
+                await runMermaidWithCompatibility(async () => {
+                    mermaid.initialize(createMermaidRenderConfig('default'));
+                    await mermaid.run({ nodes: [node] });
+                });
             }
             catch {
                 node.innerHTML = '< Invalid Diagram >';
             }
         }
         if (this._muya) {
-            mermaid.initialize({
-                securityLevel: 'strict',
-                theme: this._muya.options.mermaidTheme,
+            await runMermaidWithCompatibility(async () => {
+                mermaid.initialize({
+                    securityLevel: 'strict',
+                    theme: this._muya!.options.mermaidTheme,
+                });
             });
         }
     }

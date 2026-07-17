@@ -1141,6 +1141,11 @@ body.current-find-open .mu-front-button-wrapper {
   max-width: 100% !important;
 }
 
+.markdown-wysiwyg .mu-diagram-preview svg.mu-diagram-class {
+  width: min(100%, 640px) !important;
+  max-width: 100% !important;
+}
+
 .markdown-wysiwyg .mu-diagram-preview svg.mu-diagram-portrait {
   width: min(100%, 420px) !important;
   max-width: 100% !important;
@@ -1536,6 +1541,11 @@ body.dark .markdown-preview .token.variable {
 
 .markdown-preview svg.markdown-diagram-balanced {
   width: min(100%, 720px) !important;
+  max-width: 100% !important;
+}
+
+.markdown-preview svg.markdown-diagram-class {
+  width: min(100%, 640px) !important;
   max-width: 100% !important;
 }
 

@@ -4,6 +4,12 @@ import { fromEvent } from 'rxjs';
 import { CLASS_NAMES, PREVIEW_DOMPURIFY_CONFIG } from '../../../config';
 import { sanitize } from '../../../utils';
 import loadRenderer from '../../../utils/diagram';
+import {
+    classifyMermaidDiagramSize,
+    createMermaidRenderConfig,
+    inheritMermaidSubgraphDirection,
+    runMermaidWithCompatibility,
+} from '../../../utils/diagram/mermaidCompat';
 import logger from '../../../utils/logger';
 import Parent from '../../base/parent';
 
@@ -86,15 +92,13 @@ function scheduleMermaidRender(target: HTMLElement, run: () => Promise<void>): P
 }
 
 function applyDiagramSizeClass(svg: SVGSVGElement, width: number, height: number): void {
-    svg.classList.remove('mu-diagram-wide', 'mu-diagram-balanced', 'mu-diagram-portrait');
-    const ratio = height > 0 ? width / height : 1;
-    svg.classList.add(
-        ratio >= 1.2
-            ? 'mu-diagram-wide'
-            : ratio >= 0.75
-                ? 'mu-diagram-balanced'
-                : 'mu-diagram-portrait',
+    svg.classList.remove(
+        'mu-diagram-wide',
+        'mu-diagram-balanced',
+        'mu-diagram-portrait',
+        'mu-diagram-class',
     );
+    svg.classList.add(`mu-diagram-${classifyMermaidDiagramSize(svg, width, height)}`);
 }
 
 function normalizeMermaidViewBox(target: HTMLElement): boolean {
@@ -116,10 +120,13 @@ function normalizeMermaidViewBox(target: HTMLElement): boolean {
     )
         return false;
     const padding = 8;
+    const width = bounds.width + padding * 2;
+    const height = bounds.height + padding * 2;
     svg.setAttribute(
         'viewBox',
-        `${bounds.x - padding} ${bounds.y - padding} ${bounds.width + padding * 2} ${bounds.height + padding * 2}`,
+        `${bounds.x - padding} ${bounds.y - padding} ${width} ${height}`,
     );
+    applyDiagramSizeClass(svg, width, height);
     return true;
 }
 
@@ -128,7 +135,11 @@ async function renderMermaidInTarget(
     target: HTMLElement,
     code: string,
 ): Promise<void> {
-    target.innerHTML = sanitize(code, PREVIEW_DOMPURIFY_CONFIG, true) as string;
+    target.innerHTML = sanitize(
+        inheritMermaidSubgraphDirection(code),
+        PREVIEW_DOMPURIFY_CONFIG,
+        true,
+    ) as string;
     target.removeAttribute('data-processed');
     await render.run({ nodes: [target] });
     normalizeMermaidViewBox(target);
@@ -196,14 +207,10 @@ async function renderDiagram({
     if (type === 'mermaid') {
         await scheduleMermaidRender(target, async () => {
             const render = await loadRenderer(type);
-            render.initialize({
-                startOnLoad: false,
-                securityLevel: 'strict',
-                theme: mermaidTheme,
-                htmlLabels: false,
-                flowchart: { htmlLabels: false },
+            await runMermaidWithCompatibility(async () => {
+                render.initialize(createMermaidRenderConfig(mermaidTheme));
+                await renderMermaidInTarget(render, target, code);
             });
-            await renderMermaidInTarget(render, target, code);
         });
         return;
     }

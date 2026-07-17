@@ -21,6 +21,12 @@ import {
   zhCN,
 } from "@muyajs/core";
 import { Link2, createElement as createLucideElement } from "lucide";
+import {
+  classifyMermaidDiagramSize,
+  createMermaidRenderConfig,
+  inheritMermaidSubgraphDirection,
+  runMermaidWithCompatibility,
+} from "../vendor/marktext-muya/src/utils/diagram/mermaidCompat";
 
 export const MARKDOWN_ENGINE_VERSION = "MarkText v0.20.0-rc.1 / @muyajs/core 0.2.0";
 
@@ -94,6 +100,7 @@ function normalizeMermaidViewBox(target: HTMLElement) {
     "viewBox",
     `${bounds.x - padding} ${bounds.y - padding} ${bounds.width + padding * 2} ${bounds.height + padding * 2}`,
   );
+  finalizePreviewDiagramSvg(target);
   return true;
 }
 
@@ -235,21 +242,17 @@ async function renderMermaidDiagram(pre: HTMLPreElement, source: string, darkMod
   const task = mermaidRenderQueue.then(async () => {
     if (!pre.isConnected) return;
     const { default: mermaid } = await import("mermaid");
-    mermaid.initialize({
-      startOnLoad: false,
-      securityLevel: "strict",
-      theme: darkMode ? "dark" : "default",
-      htmlLabels: false,
-      flowchart: { htmlLabels: false },
-    });
     const container = diagramContainer("mermaid");
-    container.textContent = source;
+    container.textContent = inheritMermaidSubgraphDirection(source);
     pre.replaceWith(container);
     try {
       await waitForDiagramRenderOpportunity();
       if (!container.isConnected) return;
       container.removeAttribute("data-processed");
-      await mermaid.run({ nodes: [container] });
+      await runMermaidWithCompatibility(async () => {
+        mermaid.initialize(createMermaidRenderConfig(darkMode ? "dark" : "default"));
+        await mermaid.run({ nodes: [container] });
+      });
       normalizeMermaidViewBox(container);
     } catch (error) {
       container.replaceWith(pre);
@@ -328,15 +331,13 @@ function finalizePreviewDiagramSvg(container: HTMLElement) {
   const height = viewBox.height || Number.parseFloat(svg.getAttribute("height") ?? "");
   if (width <= 0 || height <= 0) return false;
   if (!svg.hasAttribute("viewBox")) svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-  svg.classList.remove("markdown-diagram-wide", "markdown-diagram-balanced", "markdown-diagram-portrait");
-  const ratio = width / height;
-  svg.classList.add(
-    ratio >= 1.2
-      ? "markdown-diagram-wide"
-      : ratio >= 0.75
-        ? "markdown-diagram-balanced"
-        : "markdown-diagram-portrait",
+  svg.classList.remove(
+    "markdown-diagram-wide",
+    "markdown-diagram-balanced",
+    "markdown-diagram-portrait",
+    "markdown-diagram-class",
   );
+  svg.classList.add(`markdown-diagram-${classifyMermaidDiagramSize(svg, width, height)}`);
   return true;
 }
 

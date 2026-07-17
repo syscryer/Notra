@@ -199,12 +199,66 @@ describe('diagramPreview — mermaid SVG ownership', () => {
             securityLevel: 'strict',
             theme: 'default',
             htmlLabels: false,
-            flowchart: { htmlLabels: false },
+            flowchart: { htmlLabels: false, curve: 'linear' },
+            class: { htmlLabels: false },
         });
         expect(run).toHaveBeenCalled();
         const svg = preview.domNode!.querySelector('svg')!;
         expect(svg.getAttribute('viewBox')).toBe('0 0 3986 1915');
         expect(svg.querySelector('g.root')!.getAttribute('transform')).toBe('translate(8, 8)');
+    });
+
+    it('keeps SVG labels for class diagrams in WebView2', async () => {
+        const initialize = vi.fn();
+        const run = vi.fn(async ({ nodes }: { nodes: HTMLElement[] }) => {
+            nodes[0].innerHTML = '<svg class="classDiagram"><g class="root"></g></svg>';
+            nodes[0].querySelector<SVGGElement>('g.root')!.getBBox = () => ({
+                x: 8,
+                y: 8,
+                width: 512,
+                height: 1104,
+            } as DOMRect);
+        });
+        loadRendererMock.mockResolvedValue({ initialize, run });
+
+        const code = 'classDiagram\nclass User';
+        const { preview } = makePreview(code);
+        await preview.update(code);
+
+        expect(initialize).toHaveBeenLastCalledWith({
+            startOnLoad: false,
+            securityLevel: 'strict',
+            theme: 'default',
+            htmlLabels: false,
+            flowchart: { htmlLabels: false, curve: 'linear' },
+            class: { htmlLabels: false },
+        });
+        const svg = preview.domNode!.querySelector('svg')!;
+        expect(svg.classList.contains('mu-diagram-class')).toBe(true);
+        expect(svg.classList.contains('mu-diagram-balanced')).toBe(false);
+        expect(svg.getAttribute('viewBox')).toBe('0 0 528 1120');
+    });
+
+    it('keeps tall ER diagrams readable instead of treating them as portraits', async () => {
+        const run = vi.fn(async ({ nodes }: { nodes: HTMLElement[] }) => {
+            nodes[0].innerHTML = '<svg class="erDiagram"><g class="root"></g></svg>';
+            nodes[0].querySelector<SVGGElement>('g.root')!.getBBox = () => ({
+                x: 8,
+                y: 8,
+                width: 650,
+                height: 1150,
+            } as DOMRect);
+        });
+        loadRendererMock.mockResolvedValue({ initialize: vi.fn(), run });
+
+        const code = 'erDiagram\nTASK ||--o{ TASK_VERSION : creates';
+        const { preview } = makePreview(code);
+        await preview.update(code);
+
+        const svg = preview.domNode!.querySelector('svg')!;
+        expect(svg.classList.contains('mu-diagram-wide')).toBe(true);
+        expect(svg.classList.contains('mu-diagram-portrait')).toBe(false);
+        expect(svg.getAttribute('viewBox')).toBe('0 0 666 1166');
     });
 });
 
