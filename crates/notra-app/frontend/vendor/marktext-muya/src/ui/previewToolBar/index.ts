@@ -44,12 +44,20 @@ export class PreviewToolBar extends BaseFloat {
         const handler = throttle((event: Event) => {
             if (!isMouseEvent(event))
                 return;
+            if (
+                !this.muya.domNode.isConnected
+                || this.muya.domNode.closest('[aria-hidden="true"]')
+            ) {
+                this.hide();
+                return;
+            }
 
             const { x, y } = event;
             const eles = [...document.elementsFromPoint(x, y)];
             const container = [...eles].find(
                 ele =>
                     ele[BLOCK_DOM_PROPERTY]
+                    && this.muya.domNode.contains(ele)
                     && /html-block|math-block/.test((ele[BLOCK_DOM_PROPERTY] as HTMLBlock).blockName),
             );
             if (container && !(container[BLOCK_DOM_PROPERTY] as HTMLBlock).active) {

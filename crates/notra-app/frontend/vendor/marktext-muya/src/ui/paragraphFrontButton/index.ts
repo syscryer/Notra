@@ -133,8 +133,12 @@ export class ParagraphFrontButton {
                     ele[BLOCK_DOM_PROPERTY]
                     && (ele[BLOCK_DOM_PROPERTY] as Parent).isOutMostBlock,
             );
-            if (outMostElement) {
-                this.show(outMostElement[BLOCK_DOM_PROPERTY] as Parent);
+            const block = outMostElement?.[BLOCK_DOM_PROPERTY] as Parent | undefined;
+            if (block?.blockName === 'table') {
+                this.hide();
+            }
+            else if (block) {
+                this.show(block);
                 this.render();
             }
             else {

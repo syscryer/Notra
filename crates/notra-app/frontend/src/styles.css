@@ -1080,6 +1080,11 @@ html[data-markdown-width="full"] .markdown-preview {
   background: var(--editor);
 }
 
+.markdown-editor-pane[aria-hidden="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .markdown-wysiwyg .mu-container {
   max-width: var(--markdown-content-width);
   min-height: 100%;
@@ -1733,6 +1738,16 @@ body.dark .markdown-preview .token.variable {
   max-height: none;
   border-radius: 8px;
   overflow: visible;
+}
+
+.markdown-table-context-menu {
+  width: 248px;
+  padding-block: 5px;
+}
+
+.markdown-table-context-menu .menu-row[role="menuitemradio"][aria-checked="true"] {
+  color: var(--primary);
+  background: var(--glass-row-hover);
 }
 
 .markdown-context-action-grid {

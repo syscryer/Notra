@@ -182,6 +182,13 @@ export class TableDragBar extends BaseFloat {
         const handler = throttle((event: Event) => {
             if (!isMouseEvent(event))
                 return;
+            if (
+                !this.muya.domNode.isConnected
+                || this.muya.domNode.closest('[aria-hidden="true"]')
+            ) {
+                this.hide();
+                return;
+            }
 
             const { x, y } = event;
             const els = [...document.elementsFromPoint(x, y)];
@@ -205,6 +212,10 @@ export class TableDragBar extends BaseFloat {
                         ele[BLOCK_DOM_PROPERTY]
                         && ele[BLOCK_DOM_PROPERTY].blockName === 'table.cell',
                 );
+                if (!tableCellEl || !this.muya.domNode.contains(tableCellEl)) {
+                    this.hide();
+                    return;
+                }
                 const cellBlock = tableCellEl![BLOCK_DOM_PROPERTY] as TableBodyCell;
                 const barType = hasTableCell(aboveEls) ? 'bottom' : 'right';
 
@@ -214,7 +225,7 @@ export class TableDragBar extends BaseFloat {
                 );
                 this._barType = barType;
                 this._block = cellBlock;
-                this.show(tableCellEl!);
+                this.show(tableCellEl);
                 this._render(barType);
             }
             else {

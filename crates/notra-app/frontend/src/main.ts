@@ -1923,12 +1923,14 @@ function bindMenuAction(id: string, action: () => void) {
 
 function bindMarkdownContextMenu() {
   $("editor").parentElement?.addEventListener("contextmenu", openMarkdownContextMenu);
-  $("markdownContextMenu").querySelectorAll<HTMLButtonElement>("[data-markdown-action]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const action = button.dataset.markdownAction;
-      if (!action) return;
-      void runMarkdownContextAction(action).catch((error) => {
-        log(`Markdown 编辑操作失败：${error instanceof Error ? error.message : String(error)}`);
+  [$("markdownContextMenu"), $("markdownTableContextMenu")].forEach((menu) => {
+    menu.querySelectorAll<HTMLButtonElement>("[data-markdown-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const action = button.dataset.markdownAction;
+        if (!action) return;
+        void runMarkdownContextAction(action).catch((error) => {
+          log(`Markdown 编辑操作失败：${error instanceof Error ? error.message : String(error)}`);
+        });
       });
     });
   });
@@ -1959,11 +1961,13 @@ function openMarkdownContextMenu(event: Event) {
   pointerEvent.stopPropagation();
   closeMenus();
   closeFontDropdowns();
+  const isTableContext = markdownEditor.captureTableContext(target);
   markdownEditor.hideFloatTools();
-  const menu = $("markdownContextMenu");
-  updateMarkdownContextMenuState();
-  menu.classList.toggle("submenu-left", pointerEvent.clientX + 258 + 242 + 16 > window.innerWidth);
-  showContextMenu(menu, pointerEvent, 258, 280);
+  const menu = $(isTableContext ? "markdownTableContextMenu" : "markdownContextMenu");
+  if (isTableContext) updateMarkdownTableContextMenuState();
+  else updateMarkdownContextMenuState();
+  menu.classList.toggle("submenu-left", !isTableContext && pointerEvent.clientX + 258 + 242 + 16 > window.innerWidth);
+  showContextMenu(menu, pointerEvent, isTableContext ? 248 : 258, isTableContext ? 510 : 280);
 }
 
 function updateMarkdownContextMenuState() {
@@ -1976,6 +1980,27 @@ function updateMarkdownContextMenuState() {
     button.disabled = (needsSelection && !hasSelection) || (needsEdit && readOnly);
   });
   $<HTMLButtonElement>("markdownCopyPasteMenuButton").disabled = !hasSelection && readOnly;
+}
+
+function updateMarkdownTableContextMenuState() {
+  const menu = $("markdownTableContextMenu");
+  const state = markdownEditor?.tableContextState();
+  const readOnly = editorBusyDepth > 0 || activeDocument().readOnly;
+  menu.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+    const action = button.dataset.markdownAction ?? "";
+    const unavailable = !state
+      || (action === "table:move-row-up" && state.row === 0)
+      || (action === "table:move-row-down" && state.row === state.rows - 1)
+      || (action === "table:move-column-left" && state.column === 0)
+      || (action === "table:move-column-right" && state.column === state.columns - 1);
+    button.disabled = unavailable || (readOnly && action !== "table:copy");
+    if (action.startsWith("table:align-")) {
+      const checked = state?.align === action.slice("table:align-".length);
+      button.setAttribute("aria-checked", String(checked));
+      const indicator = button.querySelector("small");
+      if (indicator) indicator.textContent = checked ? "✓" : "";
+    }
+  });
 }
 
 function openMarkdownSubmenu(trigger: HTMLButtonElement, focusFirst: boolean) {
@@ -2017,6 +2042,10 @@ async function runMarkdownContextAction(action: string) {
     return;
   }
   closeMenus();
+  if (action.startsWith("table:")) {
+    await bridge.runTableContextAction(action.slice("table:".length));
+    return;
+  }
   if (action === "paste" || action === "paste-plain") {
     await bridge.pasteAsPlainText();
     return;
@@ -2047,7 +2076,7 @@ async function runMarkdownContextAction(action: string) {
     return;
   }
   if (action === "insert:table") {
-    bridge.createTable();
+    bridge.showTablePicker();
     return;
   }
   if (action === "insert:before" || action === "insert:after") {
@@ -3304,6 +3333,7 @@ function activeContextMenu() {
     $("tabMenu"),
     $("treeMenu"),
     $("markdownContextMenu"),
+    $("markdownTableContextMenu"),
     $("fileMenu"),
     $("editMenu"),
     $("searchMenu"),
@@ -6078,7 +6108,7 @@ function renderMarkdownSurface() {
     markdownEditor?.setReadOnly(editorBusyDepth > 0 || doc.readOnly);
     scheduleMarkdownImageRefresh();
   } else {
-    markdownEditor?.hideFloatTools();
+    markdownEditorCache.forEach((item) => item.bridge.hideFloatTools());
   }
   void renderMarkdownPreview();
   requestEditorLayout();
@@ -6153,6 +6183,7 @@ function activateMarkdownEditor(entry: MarkdownEditorCacheEntry, doc: OpenDocume
     const inactive = item.documentId !== doc.id;
     item.pane.style.zIndex = inactive ? "0" : "1";
     item.pane.setAttribute("aria-hidden", String(inactive));
+    if (inactive) item.bridge.hideFloatTools();
   });
   if (!alreadyActive) {
     markdownEditor = entry.bridge;
@@ -7042,6 +7073,7 @@ function closeMenus() {
   $("tabMenu").classList.add("hidden");
   $("treeMenu").classList.add("hidden");
   $("markdownContextMenu").classList.add("hidden");
+  $("markdownTableContextMenu").classList.add("hidden");
   closeMarkdownSubmenus();
   $("fileMenu").classList.add("hidden");
   $("editMenu").classList.add("hidden");

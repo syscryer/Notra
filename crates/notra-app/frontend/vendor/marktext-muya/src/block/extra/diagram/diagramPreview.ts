@@ -7,6 +7,7 @@ import loadRenderer from '../../../utils/diagram';
 import {
     classifyMermaidDiagramSize,
     createMermaidRenderConfig,
+    repairDisconnectedMermaidClusterEdges,
     runMermaidWithCompatibility,
 } from '../../../utils/diagram/mermaidCompat';
 import logger from '../../../utils/logger';
@@ -137,6 +138,7 @@ async function renderMermaidInTarget(
     target.innerHTML = sanitize(code, PREVIEW_DOMPURIFY_CONFIG, true) as string;
     target.removeAttribute('data-processed');
     await render.run({ nodes: [target] });
+    repairDisconnectedMermaidClusterEdges(target, code);
     normalizeMermaidViewBox(target);
 }
 
@@ -203,7 +205,7 @@ async function renderDiagram({
         await scheduleMermaidRender(target, async () => {
             const render = await loadRenderer(type);
             await runMermaidWithCompatibility(async () => {
-                render.initialize(createMermaidRenderConfig(mermaidTheme));
+                render.initialize(createMermaidRenderConfig(mermaidTheme, code));
                 await renderMermaidInTarget(render, target, code);
             });
         });

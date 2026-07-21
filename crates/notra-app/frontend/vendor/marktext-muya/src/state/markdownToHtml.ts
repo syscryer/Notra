@@ -8,6 +8,7 @@ import { isHTMLElement, sanitize, unescapeHTML } from '../utils';
 import loadRenderer from '../utils/diagram';
 import {
     createMermaidRenderConfig,
+    repairDisconnectedMermaidClusterEdges,
     runMermaidWithCompatibility,
 } from '../utils/diagram/mermaidCompat';
 
@@ -63,11 +64,13 @@ export class MarkdownToHtml {
         // the entire export (#4812). Contain the failure to that diagram and
         // fall back to the same placeholder the other diagram renderers use.
         for (const node of nodes) {
+            const source = node.textContent ?? '';
             try {
                 await runMermaidWithCompatibility(async () => {
-                    mermaid.initialize(createMermaidRenderConfig('default'));
+                    mermaid.initialize(createMermaidRenderConfig('default', source));
                     await mermaid.run({ nodes: [node] });
                 });
+                repairDisconnectedMermaidClusterEdges(node as HTMLElement, source);
             }
             catch {
                 node.innerHTML = '< Invalid Diagram >';

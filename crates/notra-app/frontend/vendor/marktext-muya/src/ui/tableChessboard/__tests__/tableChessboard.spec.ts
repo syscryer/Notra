@@ -110,12 +110,15 @@ describe('tableChessboard — muya-table-picker subscription + grid pick', () =>
 
         expect(picker.status).toBe(true);
         const cells = picker.floatBox!.querySelectorAll('span.mu-table-picker-cell');
-        // Default checker grid is 6 rows × 8 columns.
-        expect(cells.length).toBe(6 * 8);
-        // The footer row/column inputs and the OK button are present.
+        // Keep the picker narrow like Typora while still offering ten rows.
+        expect(cells.length).toBe(10 * 6);
+        // A new table starts from a useful 3 x 3 selection. The footer can
+        // still accept larger dimensions without adding a redundant OK button.
         expect(picker.floatBox!.querySelector('input.row-input')).not.toBeNull();
         expect(picker.floatBox!.querySelector('input.column-input')).not.toBeNull();
-        expect(picker.floatBox!.querySelector('.footer button')).not.toBeNull();
+        expect((picker.floatBox!.querySelector('input.row-input') as HTMLInputElement).value).toBe('3');
+        expect((picker.floatBox!.querySelector('input.column-input') as HTMLInputElement).value).toBe('3');
+        expect(picker.floatBox!.querySelector('.footer button')).toBeNull();
     });
 
     it('invokes the dispatched callback with the hovered `(row, column)` on cell click and hides', async () => {
@@ -139,6 +142,24 @@ describe('tableChessboard — muya-table-picker subscription + grid pick', () =>
         expect(cb).toHaveBeenCalledTimes(1);
         expect(cb).toHaveBeenCalledWith(2, 3);
         // Picking dismisses the float.
+        expect(picker.status).toBe(false);
+    });
+
+    it('accepts manually entered dimensions with Enter', async () => {
+        const reference = stubReference();
+        const cb = vi.fn();
+        eventCenter.emit('muya-table-picker', { row: -1, column: -1 }, reference, cb);
+        await nextTick();
+
+        const rowInput = picker.floatBox!.querySelector('input.row-input') as HTMLInputElement;
+        rowInput.value = '12';
+        rowInput.dispatchEvent(new KeyboardEvent('keyup', { key: '1', bubbles: true }));
+        await nextTick();
+        const columnInput = picker.floatBox!.querySelector('input.column-input') as HTMLInputElement;
+        columnInput.value = '7';
+        columnInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+
+        expect(cb).toHaveBeenCalledWith(11, 6);
         expect(picker.status).toBe(false);
     });
 

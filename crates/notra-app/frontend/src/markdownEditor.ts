@@ -17,13 +17,16 @@ import {
   TableChessboard,
   TableColumnToolbar,
   TableDragBar,
-  TableRowColumMenu,
   zhCN,
 } from "@muyajs/core";
 import { Link2, createElement as createLucideElement } from "lucide";
+import type TableBodyCell from "../vendor/marktext-muya/src/block/gfm/table/cell";
+import { BLOCK_DOM_PROPERTY } from "../vendor/marktext-muya/src/config";
+import { getCursorReference } from "../vendor/marktext-muya/src/selection";
 import {
   classifyMermaidDiagramSize,
   createMermaidRenderConfig,
+  repairDisconnectedMermaidClusterEdges,
   runMermaidWithCompatibility,
 } from "../vendor/marktext-muya/src/utils/diagram/mermaidCompat";
 
@@ -163,7 +166,6 @@ function registerPlugins(options: Pick<MarkdownEditorOptions, "pickImagePath" | 
   registerPlugin(TableChessboard);
   registerPlugin(TableColumnToolbar);
   registerPlugin(TableDragBar);
-  registerPlugin(TableRowColumMenu);
   registerPlugin(PreviewToolBar);
 }
 
@@ -249,9 +251,10 @@ async function renderMermaidDiagram(pre: HTMLPreElement, source: string, darkMod
       if (!container.isConnected) return;
       container.removeAttribute("data-processed");
       await runMermaidWithCompatibility(async () => {
-        mermaid.initialize(createMermaidRenderConfig(darkMode ? "dark" : "default"));
+        mermaid.initialize(createMermaidRenderConfig(darkMode ? "dark" : "default", source));
         await mermaid.run({ nodes: [container] });
       });
+      repairDisconnectedMermaidClusterEdges(container, source);
       normalizeMermaidViewBox(container);
     } catch (error) {
       container.replaceWith(pre);
@@ -359,6 +362,7 @@ export class MarkdownEditorBridge {
   private synchronizedRevision = 0;
   private lastSearch: { value: string; options: MarkdownSearchOptions } | null = null;
   private searchSelection: MarkdownSelectionRange | null = null;
+  private tableContextCell: TableBodyCell | null = null;
 
   constructor(options: MarkdownEditorOptions) {
     registerPlugins(options);
@@ -533,8 +537,107 @@ export class MarkdownEditorBridge {
     this.focus();
   }
 
-  createTable(rows = 4, columns = 3) {
-    this.muya.createTable({ rows, columns });
+  showTablePicker() {
+    this.focus();
+    window.requestAnimationFrame(() => {
+      const activeBlock = this.muya.editor.activeContentBlock ?? this.muya.editor.selection.anchorBlock;
+      const reference = getCursorReference() ?? activeBlock?.domNode ?? this.root;
+      this.muya.eventCenter.emit(
+        "muya-table-picker",
+        { row: -1, column: -1 },
+        reference,
+        (row: number, column: number) => {
+          this.muya.createTable({ rows: row + 1, columns: column + 1 });
+          this.focus();
+        },
+      );
+    });
+  }
+
+  captureTableContext(target: Element) {
+    const cellElement = target.closest<HTMLElement>(".mu-table-cell");
+    const block = cellElement
+      ? (cellElement as unknown as Record<string, unknown>)[BLOCK_DOM_PROPERTY]
+      : null;
+    this.tableContextCell = block && typeof block === "object" && "blockName" in block
+      && block.blockName === "table.cell"
+      ? block as TableBodyCell
+      : null;
+    return this.tableContextCell !== null;
+  }
+
+  tableContextState() {
+    const cell = this.tableContextCell;
+    if (!cell?.parent || !cell.table.parent) return null;
+    return {
+      row: cell.rowOffset,
+      column: cell.columnOffset,
+      rows: cell.table.rowCount,
+      columns: cell.table.columnCount,
+      align: cell.align,
+    };
+  }
+
+  async runTableContextAction(action: string) {
+    const cell = this.tableContextCell;
+    if (!cell?.parent || !cell.table.parent) return;
+    const table = cell.table;
+    const row = cell.rowOffset;
+    const column = cell.columnOffset;
+    let cursorBlock = null;
+
+    switch (action) {
+      case "insert-row-above":
+        cursorBlock = table.insertRow(row);
+        break;
+      case "insert-row-below":
+        cursorBlock = table.insertRow(row + 1);
+        break;
+      case "insert-column-left":
+        cursorBlock = table.insertColumn(column);
+        break;
+      case "insert-column-right":
+        cursorBlock = table.insertColumn(column + 1);
+        break;
+      case "move-row-up":
+        cursorBlock = table.moveRow(row, row - 1, column);
+        break;
+      case "move-row-down":
+        cursorBlock = table.moveRow(row, row + 1, column);
+        break;
+      case "move-column-left":
+        cursorBlock = table.moveColumn(column, column - 1, row);
+        break;
+      case "move-column-right":
+        cursorBlock = table.moveColumn(column, column + 1, row);
+        break;
+      case "align-left":
+      case "align-center":
+      case "align-right":
+        table.alignColumn(column, action.slice("align-".length));
+        cursorBlock = cell.firstContentInDescendant();
+        break;
+      case "remove-row":
+        cursorBlock = table.removeRow(row);
+        break;
+      case "remove-column":
+        cursorBlock = table.removeColumn(column);
+        break;
+      case "copy": {
+        const markdown = this.muya.editor.jsonState.getMarkdownFromState([table.getState()]).trimEnd();
+        await navigator.clipboard.writeText(markdown);
+        cursorBlock = cell.firstContentInDescendant();
+        break;
+      }
+      case "remove-table":
+        cursorBlock = table.removeTable();
+        break;
+      default:
+        return;
+    }
+
+    this.tableContextCell = null;
+    cursorBlock?.setCursor(0, 0, true);
     this.focus();
   }
 

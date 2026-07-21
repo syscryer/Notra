@@ -9,7 +9,8 @@ import type TableRow from './row';
 import type TableInner from './table';
 import diff from 'fast-diff';
 import { fromEvent } from 'rxjs';
-import { diffToTextOp } from '../../../utils';
+import emptyStates from '../../../config/emptyStates';
+import { deepClone, diffToTextOp } from '../../../utils';
 import logger from '../../../utils/logger';
 import { LinkedList } from '../../base/linkedList/linkedList';
 import Parent from '../../base/parent';
@@ -269,6 +270,90 @@ class Table extends Parent {
                 this.jsonState.editOperation(path, diffToTextOp(diffs));
             }
         });
+    }
+
+    resize(rows: number, columns: number) {
+        const safeRows = Math.max(2, Number.isFinite(rows) ? Math.floor(rows) : 0);
+        const safeColumns = Math.max(1, Number.isFinite(columns) ? Math.floor(columns) : 0);
+        const state = this.getState();
+        const alignments = state.children[0]?.children.map(cell => cell.meta.align) ?? [];
+
+        state.children.length = Math.min(state.children.length, safeRows);
+        while (state.children.length < safeRows) {
+            state.children.push({
+                name: 'table.row',
+                children: Array.from({ length: safeColumns }, (_, index) => ({
+                    name: 'table.cell',
+                    meta: { align: alignments[index] ?? 'none' },
+                    text: '',
+                })),
+            });
+        }
+        state.children.forEach((row) => {
+            row.children.length = Math.min(row.children.length, safeColumns);
+            while (row.children.length < safeColumns) {
+                const index = row.children.length;
+                row.children.push({
+                    name: 'table.cell',
+                    meta: { align: alignments[index] ?? 'none' },
+                    text: '',
+                });
+            }
+        });
+
+        return this._replaceWithState(state, 0, 0);
+    }
+
+    moveRow(from: number, to: number, column = 0) {
+        const max = this.rowCount - 1;
+        if (from < 0 || from > max)
+            return null;
+        const target = Math.max(0, Math.min(to, max));
+        if (target === from)
+            return this.cellAt(from, Math.min(column, this.columnCount - 1))?.firstContentInDescendant() ?? null;
+
+        const state = this.getState();
+        const row = state.children.splice(from, 1)[0];
+        state.children.splice(target, 0, row);
+        return this._replaceWithState(state, target, Math.min(column, this.columnCount - 1));
+    }
+
+    moveColumn(from: number, to: number, row = 0) {
+        const max = this.columnCount - 1;
+        if (from < 0 || from > max)
+            return null;
+        const target = Math.max(0, Math.min(to, max));
+        if (target === from)
+            return this.cellAt(Math.min(row, this.rowCount - 1), from)?.firstContentInDescendant() ?? null;
+
+        const state = this.getState();
+        state.children.forEach((tableRow) => {
+            const cell = tableRow.children.splice(from, 1)[0];
+            tableRow.children.splice(target, 0, cell);
+        });
+        return this._replaceWithState(state, Math.min(row, this.rowCount - 1), target);
+    }
+
+    removeTable() {
+        let cursorBlock = this.prev?.lastContentInDescendant()
+            ?? this.next?.firstContentInDescendant()
+            ?? null;
+        if (!cursorBlock) {
+            const paragraph = ScrollPage.loadBlock('paragraph').create(
+                this.muya,
+                deepClone(emptyStates.paragraph),
+            );
+            this.parent!.insertAfter(paragraph, this);
+            cursorBlock = paragraph.firstContentInDescendant();
+        }
+        this.remove();
+        return cursorBlock;
+    }
+
+    private _replaceWithState(state: ITableState, row: number, column: number) {
+        const newTable = ScrollPage.loadBlock('table').create(this.muya, state) as Table;
+        this.replaceWith(newTable);
+        return newTable.cellAt(row, column)?.firstContentInDescendant() ?? null;
     }
 
     /**

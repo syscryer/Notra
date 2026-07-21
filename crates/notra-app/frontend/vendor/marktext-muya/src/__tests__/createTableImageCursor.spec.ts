@@ -2,6 +2,7 @@
 
 import type Content from '../block/base/content';
 import type Parent from '../block/base/parent';
+import type Table from '../block/gfm/table';
 import type { ITableState, TState } from '../state/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Muya } from '../muya';
@@ -204,6 +205,46 @@ describe('muya.createTable()', () => {
         });
         // the nested table still serializes without throwing
         expect(() => muya.getMarkdown()).not.toThrow();
+    });
+});
+
+describe('table structural editing', () => {
+    function tableBlock(muya: Muya) {
+        return muya.editor.scrollPage!.firstChild as Table;
+    }
+
+    it('resizes while preserving existing cells and alignment', async () => {
+        const muya = bootMuya('| A | B |\n| :-- | --: |\n| C | D |\n');
+        tableBlock(muya).resize(4, 3);
+        await vi.waitFor(() => {
+            const state = firstTable(muya);
+            expect(state.children.length).toBe(4);
+            expect(state.children.every(row => row.children.length === 3)).toBe(true);
+            expect(state.children[0].children.map(cell => cell.text)).toEqual(['A', 'B', '']);
+            expect(state.children[0].children.map(cell => cell.meta.align)).toEqual(['left', 'right', 'none']);
+        });
+    });
+
+    it('moves rows and columns without losing cell content', async () => {
+        const muya = bootMuya('| A | B |\n| --- | --- |\n| C | D |\n| E | F |\n');
+        const movedRow = tableBlock(muya).moveRow(2, 1, 0);
+        movedRow?.setCursor(0, 0, true);
+        await vi.waitFor(() => {
+            expect(firstTable(muya).children.map(row => row.children[0].text)).toEqual(['A', 'E', 'C']);
+        });
+        tableBlock(muya).moveColumn(1, 0, 0);
+        await vi.waitFor(() => {
+            expect(firstTable(muya).children[0].children.map(cell => cell.text)).toEqual(['B', 'A']);
+        });
+    });
+
+    it('leaves an editable paragraph when deleting the only table', async () => {
+        const muya = bootMuya('| A |\n| --- |\n| B |\n');
+        const cursor = tableBlock(muya).removeTable();
+        cursor?.setCursor(0, 0, true);
+        await vi.waitFor(() => {
+            expect(muya.getState()).toEqual([{ name: 'paragraph', text: '' }]);
+        });
     });
 });
 

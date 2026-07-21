@@ -801,6 +801,27 @@
         </div>
       </section>
 
+      <section class="popover markdown-context-menu markdown-table-context-menu hidden" id="markdownTableContextMenu" role="menu" aria-label="表格编辑菜单">
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:insert-row-above"><span class="icon-slot" data-icon="BetweenVerticalStart"></span><strong>上方插入行</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:insert-row-below"><span class="icon-slot" data-icon="BetweenVerticalEnd"></span><strong>下方插入行</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:insert-column-left"><span class="icon-slot" data-icon="BetweenHorizontalStart"></span><strong>左侧插入列</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:insert-column-right"><span class="icon-slot" data-icon="BetweenHorizontalEnd"></span><strong>右侧插入列</strong><small></small></button>
+        <div class="menu-divider"></div>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:move-row-up"><span class="icon-slot" data-icon="ArrowUp"></span><strong>上移该行</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:move-row-down"><span class="icon-slot" data-icon="ArrowDown"></span><strong>下移该行</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:move-column-left"><span class="icon-slot" data-icon="ArrowLeft"></span><strong>左移该列</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:move-column-right"><span class="icon-slot" data-icon="ArrowRight"></span><strong>右移该列</strong><small></small></button>
+        <div class="menu-divider"></div>
+        <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="table:align-left"><span class="icon-slot" data-icon="AlignLeft"></span><strong>左对齐该列</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="table:align-center"><span class="icon-slot" data-icon="AlignCenter"></span><strong>居中对齐该列</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="table:align-right"><span class="icon-slot" data-icon="AlignRight"></span><strong>右对齐该列</strong><small></small></button>
+        <div class="menu-divider"></div>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:copy"><span class="icon-slot" data-icon="Copy"></span><strong>复制表格</strong><small></small></button>
+        <button class="menu-row danger" type="button" role="menuitem" data-markdown-action="table:remove-row"><span class="icon-slot" data-icon="Trash2"></span><strong>删除行</strong><small></small></button>
+        <button class="menu-row danger" type="button" role="menuitem" data-markdown-action="table:remove-column"><span class="icon-slot" data-icon="Trash2"></span><strong>删除列</strong><small></small></button>
+        <button class="menu-row danger" type="button" role="menuitem" data-markdown-action="table:remove-table"><span class="icon-slot" data-icon="Trash2"></span><strong>删除表格</strong><small></small></button>
+      </section>
+
       <section class="command-popover hidden" id="commandPalette">
         <header class="popover-head">
           <strong>命令</strong>

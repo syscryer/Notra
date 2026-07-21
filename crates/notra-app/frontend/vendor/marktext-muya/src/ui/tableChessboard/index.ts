@@ -28,8 +28,8 @@ class TablePicker extends BaseFloat {
         const name = 'mu-table-picker';
         super(muya, name);
         this._checkerCount = {
-            row: 6,
-            column: 8,
+            row: 10,
+            column: 6,
         };
         this._oldVNode = null;
         this._current = null;
@@ -108,8 +108,12 @@ class TablePicker extends BaseFloat {
         const tableFooter = h('div.footer', [
             h('input.row-input', {
                 props: {
-                    type: 'text',
+                    type: 'number',
+                    min: 1,
                     value: +this._select!.row + 1,
+                },
+                attrs: {
+                    'aria-label': 'Rows',
                 },
                 on: {
                     keyup: (event: KeyboardEvent) => {
@@ -120,8 +124,12 @@ class TablePicker extends BaseFloat {
             'x',
             h('input.column-input', {
                 props: {
-                    type: 'text',
+                    type: 'number',
+                    min: 1,
                     value: +this._select!.column + 1,
+                },
+                attrs: {
+                    'aria-label': 'Columns',
                 },
                 on: {
                     keyup: (event: KeyboardEvent) => {
@@ -129,17 +137,6 @@ class TablePicker extends BaseFloat {
                     },
                 },
             }),
-            h(
-                'button',
-                {
-                    on: {
-                        click: (_) => {
-                            this.selectItem();
-                        },
-                    },
-                },
-                'OK',
-            ),
         ]);
 
         const vnode = h('div', [h('div.checker', tableRows), tableFooter]);
@@ -155,12 +152,16 @@ class TablePicker extends BaseFloat {
     private _keyupHandler(event: KeyboardEvent, type: 'row' | 'column') {
         let number = +this._select![type];
         const value = isHTMLInputElement(event.target) ? +event.target.value : Number.NaN;
+        if (event.key === EVENT_KEYS.Enter) {
+            if (!Number.isNaN(value))
+                this._select![type] = Math.max(value - 1, 0);
+            this.selectItem();
+            return;
+        }
         if (event.key === EVENT_KEYS.ArrowUp)
             number++;
         else if (event.key === EVENT_KEYS.ArrowDown)
             number--;
-        else if (event.key === EVENT_KEYS.Enter)
-            this.selectItem();
         else if (!Number.isNaN(value))
             number = value - 1;
 
@@ -175,7 +176,9 @@ class TablePicker extends BaseFloat {
         this._current = current;
         // Clone so footer-input edits mutating `_select` never corrupt the
         // immutable `_current` start position (ICheckerCount is flat).
-        this._select = { ...current };
+        this._select = current.row >= 0 && current.column >= 0
+            ? { ...current }
+            : { row: 2, column: 2 };
         super.show(reference, cb);
     }
 
