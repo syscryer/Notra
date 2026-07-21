@@ -26,6 +26,7 @@ interface IFakeRenderer {
     muya: {
         editor: { selection: { image: null | unknown } };
         i18n: { t: (s: string) => string };
+        options: { resolveImageSrc?: (src: string) => string };
     };
 }
 
@@ -42,6 +43,7 @@ function makeRenderer(loadResult: {
         muya: {
             editor: { selection: { image: null } },
             i18n: { t: (s: string) => s },
+            options: {},
         },
     };
 }
@@ -81,6 +83,24 @@ function findImgSrc(vnodes: VNode | VNode[]): string | undefined {
         const vnode = node as VNode;
         if (vnode.sel === 'img') {
             found = (vnode.data?.props?.src as string | undefined);
+            return;
+        }
+        if (Array.isArray(vnode.children))
+            vnode.children.forEach(walk);
+    };
+    arr.forEach(walk);
+    return found;
+}
+
+function findImgProps(vnodes: VNode | VNode[]): Record<string, unknown> | undefined {
+    const arr = Array.isArray(vnodes) ? vnodes : [vnodes];
+    let found: Record<string, unknown> | undefined;
+    const walk = (node: unknown) => {
+        if (!node || typeof node !== 'object' || found)
+            return;
+        const vnode = node as VNode;
+        if (vnode.sel === 'img') {
+            found = vnode.data?.props as Record<string, unknown> | undefined;
             return;
         }
         if (Array.isArray(vnode.children))
@@ -223,6 +243,26 @@ describe('image renderer — uses the cache-busted url for local files', () => {
         );
 
         expect(findImgSrc(out)).toBe('https://example.com/x.png');
+    });
+
+    it('defers offscreen decoding for rendered images', () => {
+        const renderer = makeRenderer({
+            id: 'mu-image-lazy',
+            isSuccess: true,
+            width: 1200,
+            height: 800,
+        });
+
+        const out = image.call(
+            asRenderer(renderer),
+            { h, block: fakeBlock, token: makeImageToken(), cursor: fakeCursor },
+        );
+
+        expect(findImgProps(out)).toMatchObject({
+            decoding: 'async',
+            loading: 'lazy',
+            referrerPolicy: 'no-referrer',
+        });
     });
 });
 

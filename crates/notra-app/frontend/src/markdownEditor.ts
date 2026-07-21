@@ -178,7 +178,10 @@ export function renderMarkdownPreviewHtml(markdown: string, options: MarkdownPre
     frontMatter: true,
     isGitlabCompatibilityEnabled: true,
   });
-  const imageSafeBody = body.replace(/<img\b(?![^>]*\breferrerpolicy=)/gi, '<img referrerpolicy="no-referrer"');
+  const imageSafeBody = body
+    .replace(/<img\b(?![^>]*\bloading=)/gi, '<img loading="lazy"')
+    .replace(/<img\b(?![^>]*\bdecoding=)/gi, '<img decoding="async"')
+    .replace(/<img\b(?![^>]*\breferrerpolicy=)/gi, '<img referrerpolicy="no-referrer"');
   return `<article class="markdown-body" data-theme="${options.darkMode ? "dark" : "light"}">${imageSafeBody}</article>`;
 }
 
@@ -937,6 +940,15 @@ export class MarkdownEditorBridge {
     cancelPendingDiagramRenders(this.root);
     this.muya.off("json-change", this.changeListener);
     this.muya.off("heading-copy-link", this.headingCopyListener);
+    this.root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+      image.removeAttribute("src");
+      image.removeAttribute("srcset");
+    });
+    this.muya.clearHistory();
+    const renderer = this.muya.editor.inlineRenderer.renderer;
+    renderer.loadImageMap.clear();
+    renderer.urlMap.clear();
+    renderer.loadMathMap.clear();
     this.muya.destroy();
   }
 }

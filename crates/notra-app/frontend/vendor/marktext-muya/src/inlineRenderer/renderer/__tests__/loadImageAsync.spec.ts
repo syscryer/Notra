@@ -237,4 +237,12 @@ describe('loadImageAsync — small image class on first load', () => {
         expect(wrapper.classList.contains('mu-image-success')).toBe(true);
         expect(wrapper.classList.contains('mu-small-image')).toBe(false);
     });
+
+    it('marks the asynchronously inserted image for lazy async decoding', async () => {
+        const wrapper = await runLoad({ url: 'data:image/png;base64,x', width: 1200, height: 800 });
+        const image = wrapper.querySelector('img');
+        expect(image?.loading).toBe('lazy');
+        expect(image?.decoding).toBe('async');
+        expect(image?.referrerPolicy).toBe('no-referrer');
+    });
 });

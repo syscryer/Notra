@@ -201,6 +201,8 @@ export default function image(
             const data = {
                 props: {
                     alt: alt.replace(/[`*{}[\]()#+\-.!_>~:|<$]/g, ''),
+                    decoding: 'async',
+                    loading: 'lazy',
                     referrerPolicy: 'no-referrer',
                     src: imgSrc,
                     title,

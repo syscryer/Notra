@@ -873,7 +873,11 @@ type MarkdownEditorCacheEntry = {
   lastUsed: number;
 };
 
-const MAX_MARKDOWN_EDITOR_CACHE = 3;
+// A Muya instance owns the complete document DOM plus decoded images, rendered
+// diagrams, history and plugin state. Keeping several hidden instances made a
+// handful of image-heavy Markdown tabs consume more than 1 GB in WebView2.
+// Retain only the active rich editor; Monaco models remain cached per tab.
+const MAX_MARKDOWN_EDITOR_CACHE = 1;
 const markdownEditorCache = new globalThis.Map<number, MarkdownEditorCacheEntry>();
 const markdownEditorPromises = new globalThis.Map<number, Promise<MarkdownEditorCacheEntry | null>>();
 
@@ -6093,6 +6097,7 @@ function renderMarkdownSurface() {
   const doc = activeDocument();
   const markdownDocument = isMarkdownLikeDocument(doc);
   const wantsWysiwyg = markdownDocument && state.markdownEditMode === "wysiwyg";
+  disposeInactiveMarkdownEditors(wantsWysiwyg ? doc.id : 0);
   const cachedEntry = wantsWysiwyg ? markdownEditorCache.get(doc.id) : null;
   if (cachedEntry) activateMarkdownEditor(cachedEntry, doc);
   else if (wantsWysiwyg && !state.restoring) void ensureMarkdownEditor(doc);
@@ -6142,7 +6147,12 @@ async function ensureMarkdownEditor(doc: OpenDocument) {
 async function createMarkdownEditor(doc: OpenDocument): Promise<MarkdownEditorCacheEntry | null> {
   try {
     const { MarkdownEditorBridge } = await loadMarkdownModule();
-    if (!state.documents.some((item) => item.id === doc.id)) return null;
+    if (
+      !state.documents.some((item) => item.id === doc.id)
+      || state.activeId !== doc.id
+      || state.markdownEditMode !== "wysiwyg"
+      || !isMarkdownLikeDocument(doc)
+    ) return null;
 
     const pane = document.createElement("div");
     pane.className = "markdown-editor-pane";
@@ -6203,6 +6213,12 @@ function evictMarkdownEditorCache(keepDocumentId: number) {
     if (!candidate) return;
     disposeMarkdownEditor(candidate.documentId);
   }
+}
+
+function disposeInactiveMarkdownEditors(keepDocumentId: number) {
+  Array.from(markdownEditorCache.keys()).forEach((documentId) => {
+    if (documentId !== keepDocumentId) disposeMarkdownEditor(documentId);
+  });
 }
 
 function disposeMarkdownEditor(documentId: number) {
@@ -6368,6 +6384,8 @@ function resolveMarkdownImageSource(source: string, doc: OpenDocument) {
 
 function refreshMarkdownResources(root: ParentNode, doc: OpenDocument) {
   root.querySelectorAll<HTMLImageElement>("img").forEach((image) => {
+    image.loading = "lazy";
+    image.decoding = "async";
     const current = image.getAttribute("src") ?? "";
     const stored = image.dataset.notraSource;
     if (/^(?:https?:|data:|blob:|asset:)/i.test(current) && !stored) return;
