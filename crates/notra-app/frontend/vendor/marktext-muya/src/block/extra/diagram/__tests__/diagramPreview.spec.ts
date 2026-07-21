@@ -6,7 +6,7 @@ import { CLASS_NAMES } from '../../../../config';
 import I18n from '../../../../i18n';
 import { en } from '../../../../locales/en';
 import { zhCN } from '../../../../locales/zh-CN';
-import DiagramPreview from '../diagramPreview';
+import DiagramPreview, { cancelPendingDiagramRenders } from '../diagramPreview';
 
 // The diagram renderer (`utils/diagram` default export) dynamically imports
 // heavy renderer packages (mermaid / vega / flowchart) that don't load under
@@ -118,6 +118,58 @@ describe('diagramPreview — invalid / error state', () => {
 });
 
 describe('diagramPreview — mermaid SVG ownership', () => {
+    it('pauses queued rendering while the containing editor tab is hidden', async () => {
+        const run = vi.fn(async ({ nodes }: { nodes: HTMLElement[] }) => {
+            nodes[0].innerHTML = '<svg><g class="root"></g></svg>';
+            nodes[0].querySelector<SVGGElement>('g.root')!.getBBox = () => ({
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 80,
+            } as DOMRect);
+        });
+        loadRendererMock.mockResolvedValue({ initialize: vi.fn(), run });
+
+        const pane = document.createElement('div');
+        pane.className = 'markdown-editor-pane';
+        pane.setAttribute('aria-hidden', 'true');
+        document.body.append(pane);
+        bootedHosts.push(pane);
+
+        const { muya } = makeFakeMuya();
+        const preview = new DiagramPreview(muya, makeState(''));
+        pane.append(preview.domNode!);
+        const update = preview.update('flowchart TD\nA --> B');
+
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        expect(run).not.toHaveBeenCalled();
+
+        pane.setAttribute('aria-hidden', 'false');
+        await update;
+        expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it('releases deferred jobs when their editor is destroyed', async () => {
+        const run = vi.fn(async () => undefined);
+        loadRendererMock.mockResolvedValue({ initialize: vi.fn(), run });
+
+        const pane = document.createElement('div');
+        pane.className = 'markdown-editor-pane';
+        pane.setAttribute('aria-hidden', 'true');
+        document.body.append(pane);
+        bootedHosts.push(pane);
+
+        const { muya } = makeFakeMuya();
+        const preview = new DiagramPreview(muya, makeState(''));
+        pane.append(preview.domNode!);
+        const update = preview.update('flowchart TD\nA --> B');
+
+        cancelPendingDiagramRenders(pane);
+        await update;
+        expect(run).not.toHaveBeenCalled();
+    });
+
     it('normalizes the Mermaid viewBox to its graph bounds without rerendering', async () => {
         const run = vi.fn(async ({ nodes }: { nodes: HTMLElement[] }) => {
             nodes[0].innerHTML = '<svg viewBox="-138 -83 2146 2091"><g class="root"></g></svg>';

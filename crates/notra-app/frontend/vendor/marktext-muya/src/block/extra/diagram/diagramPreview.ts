@@ -24,14 +24,89 @@ interface IMermaidRenderJob {
 
 const mermaidRenderJobs: IMermaidRenderJob[] = [];
 let mermaidRenderRunning = false;
+let mermaidRenderWakeFrame = 0;
+let mermaidRenderWakeListenersReady = false;
+
+function diagramRenderViewport(target: HTMLElement): { top: number; bottom: number; height: number } {
+    const pane = target.closest<HTMLElement>('.markdown-editor-pane');
+    if (pane) {
+        const rect = pane.getBoundingClientRect();
+        const height = rect.height || pane.clientHeight;
+        if (height > 0)
+            return { top: rect.top, bottom: rect.bottom, height };
+    }
+    const height = Math.max(1, window.innerHeight);
+    return { top: 0, bottom: height, height };
+}
 
 function diagramDistanceFromViewport(target: HTMLElement): number {
-    if (!target.isConnected)
+    if (!target.isConnected || target.closest('[aria-hidden="true"]'))
         return Number.MAX_SAFE_INTEGER;
     const rect = target.getBoundingClientRect();
-    if (rect.bottom >= 0 && rect.top <= window.innerHeight)
+    const viewport = diagramRenderViewport(target);
+    if (rect.bottom >= viewport.top && rect.top <= viewport.bottom)
         return 0;
-    return rect.top > window.innerHeight ? rect.top - window.innerHeight : -rect.bottom;
+    return rect.top > viewport.bottom ? rect.top - viewport.bottom : viewport.top - rect.bottom;
+}
+
+function diagramIsNearViewport(target: HTMLElement): boolean {
+    const distance = diagramDistanceFromViewport(target);
+    return distance <= Math.max(800, diagramRenderViewport(target).height * 1.5);
+}
+
+function requestMermaidRenderDrain(): void {
+    if (mermaidRenderJobs.length === 0 || mermaidRenderWakeFrame)
+        return;
+    mermaidRenderWakeFrame = window.requestAnimationFrame(() => {
+        mermaidRenderWakeFrame = 0;
+        void drainMermaidRenderQueue();
+    });
+}
+
+function ensureMermaidRenderWakeListeners(): void {
+    if (mermaidRenderWakeListenersReady)
+        return;
+    mermaidRenderWakeListenersReady = true;
+    document.addEventListener('scroll', requestMermaidRenderDrain, true);
+    window.addEventListener('resize', requestMermaidRenderDrain);
+    new MutationObserver(requestMermaidRenderDrain).observe(document.documentElement, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['aria-hidden'],
+    });
+}
+
+function takeNextMermaidRenderJob(): IMermaidRenderJob | null {
+    for (let index = mermaidRenderJobs.length - 1; index >= 0; index -= 1) {
+        const job = mermaidRenderJobs[index];
+        if (!job.target.isConnected) {
+            mermaidRenderJobs.splice(index, 1);
+            job.resolve();
+        }
+    }
+
+    let nextIndex = -1;
+    let nextDistance = Number.MAX_SAFE_INTEGER;
+    mermaidRenderJobs.forEach((job, index) => {
+        if (!diagramIsNearViewport(job.target))
+            return;
+        const distance = diagramDistanceFromViewport(job.target);
+        if (distance < nextDistance) {
+            nextIndex = index;
+            nextDistance = distance;
+        }
+    });
+    return nextIndex >= 0 ? mermaidRenderJobs.splice(nextIndex, 1)[0] : null;
+}
+
+export function cancelPendingDiagramRenders(root: Node): void {
+    for (let index = mermaidRenderJobs.length - 1; index >= 0; index -= 1) {
+        const job = mermaidRenderJobs[index];
+        if (job.target === root || root.contains(job.target)) {
+            mermaidRenderJobs.splice(index, 1);
+            job.resolve();
+        }
+    }
 }
 
 async function waitForDiagramRenderOpportunity(): Promise<void> {
@@ -60,14 +135,9 @@ async function drainMermaidRenderQueue(): Promise<void> {
     try {
         while (mermaidRenderJobs.length > 0) {
             await waitForDiagramRenderOpportunity();
-            mermaidRenderJobs.sort(
-                (left, right) => diagramDistanceFromViewport(left.target) - diagramDistanceFromViewport(right.target),
-            );
-            const job = mermaidRenderJobs.shift()!;
-            if (!job.target.isConnected) {
-                job.resolve();
-                continue;
-            }
+            const job = takeNextMermaidRenderJob();
+            if (!job)
+                return;
             try {
                 await job.run();
                 job.resolve();
@@ -85,6 +155,7 @@ async function drainMermaidRenderQueue(): Promise<void> {
 }
 
 function scheduleMermaidRender(target: HTMLElement, run: () => Promise<void>): Promise<void> {
+    ensureMermaidRenderWakeListeners();
     return new Promise((resolve, reject) => {
         mermaidRenderJobs.push({ target, run, resolve, reject });
         void drainMermaidRenderQueue();

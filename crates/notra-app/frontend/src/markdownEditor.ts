@@ -21,6 +21,7 @@ import {
 } from "@muyajs/core";
 import { Link2, createElement as createLucideElement } from "lucide";
 import type TableBodyCell from "../vendor/marktext-muya/src/block/gfm/table/cell";
+import { cancelPendingDiagramRenders } from "../vendor/marktext-muya/src/block/extra/diagram/diagramPreview";
 import { BLOCK_DOM_PROPERTY } from "../vendor/marktext-muya/src/config";
 import { getCursorReference } from "../vendor/marktext-muya/src/selection";
 import {
@@ -363,11 +364,17 @@ export class MarkdownEditorBridge {
   private lastSearch: { value: string; options: MarkdownSearchOptions } | null = null;
   private searchSelection: MarkdownSelectionRange | null = null;
   private tableContextCell: TableBodyCell | null = null;
+  private appearanceSignature: string;
 
   constructor(options: MarkdownEditorOptions) {
     registerPlugins(options);
     this.onChange = options.onChange;
     this.onHeadingAnchorCopied = options.onHeadingAnchorCopied;
+    this.appearanceSignature = markdownAppearanceSignature(
+      options.darkMode,
+      options.fontSize,
+      options.fontFamily,
+    );
     const initialMarkdown = normalizeMarkdownForEngine(options.markdown);
     this.markdown = initialMarkdown;
     this.muya = new Muya(options.element, {
@@ -476,6 +483,7 @@ export class MarkdownEditorBridge {
     this.markdown = normalizedMarkdown;
     this.applyingMarkdown = true;
     try {
+      cancelPendingDiagramRenders(this.root);
       if (preserveHistory) {
         this.muya.replaceContent(normalizedMarkdown);
         if (focus) this.focus();
@@ -490,6 +498,9 @@ export class MarkdownEditorBridge {
   }
 
   updateAppearance(darkMode: boolean, fontSize: number, fontFamily: string) {
+    const signature = markdownAppearanceSignature(darkMode, fontSize, fontFamily);
+    if (signature === this.appearanceSignature) return;
+    this.appearanceSignature = signature;
     this.muya.setOptions({
       fontSize,
       editorFontFamily: fontFamily,
@@ -923,10 +934,15 @@ export class MarkdownEditorBridge {
 
   destroy() {
     this.headingCopyLinkObserver.disconnect();
+    cancelPendingDiagramRenders(this.root);
     this.muya.off("json-change", this.changeListener);
     this.muya.off("heading-copy-link", this.headingCopyListener);
     this.muya.destroy();
   }
+}
+
+function markdownAppearanceSignature(darkMode: boolean, fontSize: number, fontFamily: string) {
+  return JSON.stringify([darkMode, fontSize, fontFamily]);
 }
 
 function injectSearchMarker(
