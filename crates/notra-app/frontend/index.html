@@ -801,6 +801,58 @@
         </div>
       </section>
 
+      <section class="popover markdown-context-menu markdown-image-context-menu hidden" id="markdownImageContextMenu" role="menu" aria-label="图片编辑菜单">
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:open"><span class="icon-slot" data-icon="ExternalLink"></span><strong>在浏览器中打开图片</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:copy-address"><span class="icon-slot" data-icon="Copy"></span><strong>复制图片地址</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:reveal"><span class="icon-slot" data-icon="FolderOpen"></span><strong>在资源管理器中显示</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:copy-to"><span class="icon-slot" data-icon="Files"></span><strong>复制图片到...</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:move-to" data-needs-edit><span class="icon-slot" data-icon="Replace"></span><strong>重命名 / 移动图片到...</strong><small></small></button>
+        <div class="menu-divider"></div>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:replace" data-needs-edit><span class="icon-slot" data-icon="Replace"></span><strong>替换图片</strong><small></small></button>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:edit" data-needs-edit><span class="icon-slot" data-icon="Edit3"></span><strong>编辑图片属性</strong><small></small></button>
+
+        <div class="markdown-context-submenu-host">
+          <button class="menu-row markdown-context-parent" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-markdown-submenu="markdownImageScaleMenu" data-needs-edit>
+            <span class="icon-slot" data-icon="ZoomIn"></span><strong>缩放图片</strong><small class="icon-slot submenu-chevron" data-icon="ChevronRight"></small>
+          </button>
+          <div class="markdown-context-submenu markdown-image-scale-submenu hidden" id="markdownImageScaleMenu" role="menu" aria-label="缩放图片">
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:scale-25" data-needs-edit><span class="icon-slot" data-icon="Minus"></span><strong>25%</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:scale-50" data-needs-edit><span class="icon-slot" data-icon="Minus"></span><strong>50%</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:scale-75" data-needs-edit><span class="icon-slot" data-icon="ZoomOut"></span><strong>75%</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:scale-100" data-needs-edit><span class="icon-slot" data-icon="ZoomIn"></span><strong>100%</strong><small></small></button>
+            <div class="menu-divider"></div>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:scale-fit" data-needs-edit><span class="icon-slot" data-icon="Maximize2"></span><strong>适应编辑器宽度</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:scale-original" data-needs-edit><span class="icon-slot" data-icon="Image"></span><strong>原始尺寸</strong><small></small></button>
+          </div>
+        </div>
+
+        <div class="markdown-context-submenu-host">
+          <button class="menu-row markdown-context-parent" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-markdown-submenu="markdownImageAlignMenu" data-needs-edit>
+            <span class="icon-slot" data-icon="AlignCenter"></span><strong>图片对齐</strong><small class="icon-slot submenu-chevron" data-icon="ChevronRight"></small>
+          </button>
+          <div class="markdown-context-submenu markdown-image-align-submenu hidden" id="markdownImageAlignMenu" role="menu" aria-label="图片对齐">
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:align-inline" data-needs-edit><span class="icon-slot" data-icon="WrapText"></span><strong>行内</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:align-left" data-needs-edit><span class="icon-slot" data-icon="AlignLeft"></span><strong>左对齐</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:align-center" data-needs-edit><span class="icon-slot" data-icon="AlignCenter"></span><strong>居中</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:align-right" data-needs-edit><span class="icon-slot" data-icon="AlignRight"></span><strong>右对齐</strong><small></small></button>
+          </div>
+        </div>
+
+        <div class="markdown-context-submenu-host">
+          <button class="menu-row markdown-context-parent" type="button" role="menuitem" aria-haspopup="menu" aria-expanded="false" data-markdown-submenu="markdownImageSyntaxMenu" data-needs-edit>
+            <span class="icon-slot" data-icon="Code2"></span><strong>转换图片语法</strong><small class="icon-slot submenu-chevron" data-icon="ChevronRight"></small>
+          </button>
+          <div class="markdown-context-submenu markdown-image-syntax-submenu hidden" id="markdownImageSyntaxMenu" role="menu" aria-label="转换图片语法">
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:syntax-markdown" data-needs-edit><span class="icon-slot" data-icon="FileText"></span><strong>Markdown 语法</strong><small></small></button>
+            <button class="menu-row" type="button" role="menuitemradio" data-markdown-action="image:syntax-html" data-needs-edit><span class="icon-slot" data-icon="Code2"></span><strong>HTML 语法</strong><small></small></button>
+          </div>
+        </div>
+
+        <div class="menu-divider"></div>
+        <button class="menu-row" type="button" role="menuitem" data-markdown-action="image:copy-markdown"><span class="icon-slot" data-icon="ClipboardCopy"></span><strong>复制图片 Markdown</strong><small></small></button>
+        <button class="menu-row danger" type="button" role="menuitem" data-markdown-action="image:delete" data-needs-edit><span class="icon-slot" data-icon="Trash2"></span><strong>删除图片</strong><small></small></button>
+      </section>
+
       <section class="popover markdown-context-menu markdown-table-context-menu hidden" id="markdownTableContextMenu" role="menu" aria-label="表格编辑菜单">
         <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:insert-row-above"><span class="icon-slot" data-icon="BetweenVerticalStart"></span><strong>上方插入行</strong><small></small></button>
         <button class="menu-row" type="button" role="menuitem" data-markdown-action="table:insert-row-below"><span class="icon-slot" data-icon="BetweenVerticalEnd"></span><strong>下方插入行</strong><small></small></button>

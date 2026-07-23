@@ -5,6 +5,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   ArrowDown,
   ArrowUp,
   BetweenVerticalEnd,
@@ -907,6 +910,9 @@ type TextInputOptions = {
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const appWindow = getCurrentWindow();
 const lucideIcons: Record<string, IconNode> = {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   ArrowDown,
   ArrowUp,
   BetweenVerticalEnd,
@@ -1927,7 +1933,7 @@ function bindMenuAction(id: string, action: () => void) {
 
 function bindMarkdownContextMenu() {
   $("editor").parentElement?.addEventListener("contextmenu", openMarkdownContextMenu);
-  [$("markdownContextMenu"), $("markdownTableContextMenu")].forEach((menu) => {
+  document.querySelectorAll<HTMLElement>(".markdown-context-menu").forEach((menu) => {
     menu.querySelectorAll<HTMLButtonElement>("[data-markdown-action]").forEach((button) => {
       button.addEventListener("click", () => {
         const action = button.dataset.markdownAction;
@@ -1937,21 +1943,21 @@ function bindMarkdownContextMenu() {
         });
       });
     });
-  });
-  $("markdownContextMenu").querySelectorAll<HTMLElement>(".markdown-context-submenu-host").forEach((host) => {
-    const trigger = host.querySelector<HTMLButtonElement>("[data-markdown-submenu]");
-    if (!trigger) return;
-    host.addEventListener("pointerenter", () => {
-      if (!$("markdownContextMenu").classList.contains("hidden") && !trigger.disabled) {
-        openMarkdownSubmenu(trigger, false);
-      }
-    });
-    host.addEventListener("pointerleave", () => closeMarkdownSubmenus());
-    trigger.addEventListener("click", (event) => {
-      event.stopPropagation();
-      const submenu = $(trigger.dataset.markdownSubmenu ?? "");
-      if (submenu.classList.contains("hidden")) openMarkdownSubmenu(trigger, true);
-      else closeMarkdownSubmenus();
+    menu.querySelectorAll<HTMLElement>(".markdown-context-submenu-host").forEach((host) => {
+      const trigger = host.querySelector<HTMLButtonElement>("[data-markdown-submenu]");
+      if (!trigger) return;
+      host.addEventListener("pointerenter", () => {
+        if (!menu.classList.contains("hidden") && !trigger.disabled) {
+          openMarkdownSubmenu(trigger, false);
+        }
+      });
+      host.addEventListener("pointerleave", () => closeMarkdownSubmenus());
+      trigger.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const submenu = $(trigger.dataset.markdownSubmenu ?? "");
+        if (submenu.classList.contains("hidden")) openMarkdownSubmenu(trigger, true);
+        else closeMarkdownSubmenus();
+      });
     });
   });
 }
@@ -1965,13 +1971,19 @@ function openMarkdownContextMenu(event: Event) {
   pointerEvent.stopPropagation();
   closeMenus();
   closeFontDropdowns();
-  const isTableContext = markdownEditor.captureTableContext(target);
+  const isImageContext = markdownEditor.captureImageContext(target);
+  const isTableContext = !isImageContext && markdownEditor.captureTableContext(target);
   markdownEditor.hideFloatTools();
-  const menu = $(isTableContext ? "markdownTableContextMenu" : "markdownContextMenu");
-  if (isTableContext) updateMarkdownTableContextMenuState();
+  const menu = $(isImageContext
+    ? "markdownImageContextMenu"
+    : isTableContext
+      ? "markdownTableContextMenu"
+      : "markdownContextMenu");
+  if (isImageContext) updateMarkdownImageContextMenuState();
+  else if (isTableContext) updateMarkdownTableContextMenuState();
   else updateMarkdownContextMenuState();
   menu.classList.toggle("submenu-left", !isTableContext && pointerEvent.clientX + 258 + 242 + 16 > window.innerWidth);
-  showContextMenu(menu, pointerEvent, isTableContext ? 248 : 258, isTableContext ? 510 : 280);
+  showContextMenu(menu, pointerEvent, isTableContext ? 248 : 258, isImageContext ? 410 : isTableContext ? 510 : 280);
 }
 
 function updateMarkdownContextMenuState() {
@@ -2007,6 +2019,37 @@ function updateMarkdownTableContextMenuState() {
   });
 }
 
+function updateMarkdownImageContextMenuState() {
+  const menu = $("markdownImageContextMenu");
+  const state = markdownEditor?.imageContextState();
+  const readOnly = editorBusyDepth > 0 || activeDocument().readOnly;
+  menu.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+    const action = button.dataset.markdownAction ?? "";
+    const needsEdit = button.hasAttribute("data-needs-edit");
+    button.disabled = !state
+      || (needsEdit && readOnly)
+      || (action === "image:copy-address" && !state.src)
+      || (action === "image:open" && !state.isRemote)
+      || (["image:reveal", "image:copy-to", "image:move-to"].includes(action) && !state.isLocal);
+
+    let checked = false;
+    if (action.startsWith("image:align-")) {
+      checked = state?.align === action.slice("image:align-".length);
+    } else if (action.startsWith("image:syntax-")) {
+      checked = state?.syntax === action.slice("image:syntax-".length);
+    } else if (action.startsWith("image:scale-") && /^image:scale-\d+$/.test(action)) {
+      const percent = Number.parseInt(action.slice("image:scale-".length), 10);
+      const expected = state?.naturalWidth ? Math.round(state.naturalWidth * percent / 100) : 0;
+      checked = Boolean(state?.width && expected && Math.abs(state.width - expected) <= 1);
+    }
+    if (button.getAttribute("role") === "menuitemradio") {
+      button.setAttribute("aria-checked", String(checked));
+      const indicator = button.querySelector("small");
+      if (indicator) indicator.textContent = checked ? "✓" : "";
+    }
+  });
+}
+
 function openMarkdownSubmenu(trigger: HTMLButtonElement, focusFirst: boolean) {
   if (trigger.disabled) return;
   const submenuId = trigger.dataset.markdownSubmenu;
@@ -2026,12 +2069,12 @@ function openMarkdownSubmenu(trigger: HTMLButtonElement, focusFirst: boolean) {
 }
 
 function closeMarkdownSubmenus(exceptId = "") {
-  $("markdownContextMenu").querySelectorAll<HTMLElement>(".markdown-context-submenu").forEach((submenu) => {
+  document.querySelectorAll<HTMLElement>(".markdown-context-menu .markdown-context-submenu").forEach((submenu) => {
     if (submenu.id === exceptId) return;
     submenu.classList.add("hidden");
     submenu.style.top = "-6px";
   });
-  $("markdownContextMenu").querySelectorAll<HTMLButtonElement>("[data-markdown-submenu]").forEach((trigger) => {
+  document.querySelectorAll<HTMLButtonElement>(".markdown-context-menu [data-markdown-submenu]").forEach((trigger) => {
     trigger.setAttribute("aria-expanded", String(trigger.dataset.markdownSubmenu === exceptId));
   });
 }
@@ -2046,6 +2089,57 @@ async function runMarkdownContextAction(action: string) {
     return;
   }
   closeMenus();
+  if (action.startsWith("image:")) {
+    const imageAction = action.slice("image:".length);
+    const imageState = bridge.imageContextState();
+    if (!imageState) return;
+    if (imageAction === "open") {
+      openMarkdownLink(imageState.src);
+      return;
+    }
+    if (imageAction === "copy-address") {
+      await navigator.clipboard.writeText(imageState.src);
+      return;
+    }
+    if (imageAction === "reveal") {
+      const path = absoluteMarkdownResourcePath(imageState.src.split(/[?#]/, 1)[0], activeDocument());
+      if (path) await revealPathInExplorer(path);
+      return;
+    }
+    if (imageAction === "copy-to" || imageAction === "move-to") {
+      const doc = activeDocument();
+      const source = absoluteMarkdownResourcePath(imageState.src.split(/[?#]/, 1)[0], doc);
+      if (!source) return;
+      const destination = await invoke<string | null>("pick_save_path", {
+        request: {
+          defaultDir: pathDirectory(source),
+          fileName: fileNameFromPath(source),
+        },
+      });
+      if (!destination) return;
+      const transferredPath = await invoke<string>("transfer_image_file", {
+        request: {
+          source,
+          destination,
+          moveSource: imageAction === "move-to",
+        },
+      });
+      if (imageAction === "move-to" && bridge === markdownEditor && activeDocument().id === doc.id) {
+        const nextSource = doc.path
+          ? relativeMarkdownPath(pathDirectory(doc.path), transferredPath)
+          : transferredPath.replace(/\\/g, "/");
+        bridge.replaceContextImage(nextSource);
+      }
+      return;
+    }
+    if (imageAction === "replace") {
+      const src = await pickMarkdownImagePath();
+      if (src && bridge === markdownEditor && isMarkdownWysiwygActive()) bridge.replaceContextImage(src);
+      return;
+    }
+    await bridge.runImageContextAction(imageAction);
+    return;
+  }
   if (action.startsWith("table:")) {
     await bridge.runTableContextAction(action.slice("table:".length));
     return;
@@ -3319,9 +3413,10 @@ function updateTabMenuState() {
 }
 
 function showContextMenu(menu: HTMLElement, event: MouseEvent, fallbackWidth: number, fallbackHeight: number) {
+  menu.style.visibility = "hidden";
   menu.style.right = "auto";
-  menu.style.left = "0px";
-  menu.style.top = "0px";
+  menu.style.left = "8px";
+  menu.style.top = "48px";
   menu.classList.remove("hidden");
   const width = menu.offsetWidth || fallbackWidth;
   const height = menu.offsetHeight || fallbackHeight;
@@ -3329,6 +3424,7 @@ function showContextMenu(menu: HTMLElement, event: MouseEvent, fallbackWidth: nu
   const maxTop = Math.max(48, window.innerHeight - height - 8);
   menu.style.left = `${Math.min(Math.max(8, event.clientX), maxLeft)}px`;
   menu.style.top = `${Math.min(Math.max(48, event.clientY), maxTop)}px`;
+  menu.style.visibility = "visible";
   contextMenuButtons(menu)[0]?.focus();
 }
 
@@ -3337,6 +3433,7 @@ function activeContextMenu() {
     $("tabMenu"),
     $("treeMenu"),
     $("markdownContextMenu"),
+    $("markdownImageContextMenu"),
     $("markdownTableContextMenu"),
     $("fileMenu"),
     $("editMenu"),
@@ -3381,7 +3478,7 @@ function handleContextMenuKeydown(event: KeyboardEvent) {
     const submenu = document.activeElement instanceof Element
       ? document.activeElement.closest<HTMLElement>(".markdown-context-submenu")
       : null;
-    if (menu.id === "markdownContextMenu" && submenu) {
+    if (menu.classList.contains("markdown-context-menu") && submenu) {
       closeMarkdownSubmenus();
       menu.querySelectorAll<HTMLButtonElement>("[data-markdown-submenu]").forEach((trigger) => {
         if (trigger.dataset.markdownSubmenu === submenu.id) trigger.focus();
@@ -3395,7 +3492,7 @@ function handleContextMenuKeydown(event: KeyboardEvent) {
     trigger?.focus();
     return true;
   }
-  if (menu.id === "markdownContextMenu" && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+  if (menu.classList.contains("markdown-context-menu") && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
     const button = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
     const submenu = button?.closest<HTMLElement>(".markdown-context-submenu");
     if (event.key === "ArrowRight" && button?.dataset.markdownSubmenu) {
@@ -7091,6 +7188,7 @@ function closeMenus() {
   $("tabMenu").classList.add("hidden");
   $("treeMenu").classList.add("hidden");
   $("markdownContextMenu").classList.add("hidden");
+  $("markdownImageContextMenu").classList.add("hidden");
   $("markdownTableContextMenu").classList.add("hidden");
   closeMarkdownSubmenus();
   $("fileMenu").classList.add("hidden");

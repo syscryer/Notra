@@ -1745,9 +1745,22 @@ body.dark .markdown-preview .token.variable {
   padding-block: 5px;
 }
 
-.markdown-table-context-menu .menu-row[role="menuitemradio"][aria-checked="true"] {
+.markdown-image-context-menu {
+  width: 258px;
+  padding-block: 5px;
+}
+
+.markdown-context-menu .menu-row[role="menuitemradio"][aria-checked="true"] {
   color: var(--primary);
   background: var(--glass-row-hover);
+}
+
+.markdown-image-context-menu .markdown-context-submenu {
+  width: 210px;
+}
+
+.markdown-image-scale-submenu .menu-row strong {
+  font-variant-numeric: tabular-nums;
 }
 
 .markdown-context-action-grid {

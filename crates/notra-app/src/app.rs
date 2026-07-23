@@ -224,6 +224,14 @@ pub struct DialogPathRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImageTransferRequest {
+    pub source: String,
+    pub destination: String,
+    pub move_source: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchRequest {
     pub root: String,
     pub query: String,
@@ -362,6 +370,7 @@ pub fn run() {
             open_path,
             reopen_path_with_encoding,
             pick_save_path,
+            transfer_image_file,
             save_document,
             pick_workspace_path,
             choose_workspace,
@@ -934,6 +943,40 @@ fn search_report_to_dto(report: DirectorySearchReport) -> SearchReportDto {
         files_scanned,
         elapsed_ms,
     }
+}
+
+#[tauri::command]
+async fn transfer_image_file(request: ImageTransferRequest) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = PathBuf::from(request.source);
+        let destination = PathBuf::from(request.destination);
+        if source == destination {
+            return Err("源图片和目标路径相同".to_owned());
+        }
+        let metadata = fs::metadata(&source)
+            .map_err(|err| format!("读取源图片失败：{}：{err}", source.display()))?;
+        if !metadata.is_file() {
+            return Err(format!("源路径不是文件：{}", source.display()));
+        }
+        let _destination_dir = destination
+            .parent()
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| format!("目标目录不存在：{}", destination.display()))?;
+        fs::copy(&source, &destination).map_err(|err| {
+            format!(
+                "复制图片失败：{} -> {}：{err}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+        if request.move_source {
+            fs::remove_file(&source)
+                .map_err(|err| format!("删除原图片失败：{}：{err}", source.display()))?;
+        }
+        Ok(destination.display().to_string())
+    })
+    .await
+    .map_err(|err| format!("图片文件操作失败：{err}"))?
 }
 
 fn replace_preview_to_dto(

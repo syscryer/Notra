@@ -20,10 +20,12 @@ import {
   zhCN,
 } from "@muyajs/core";
 import { Link2, createElement as createLucideElement } from "lucide";
+import type Format from "../vendor/marktext-muya/src/block/base/format";
 import type TableBodyCell from "../vendor/marktext-muya/src/block/gfm/table/cell";
 import { cancelPendingDiagramRenders } from "../vendor/marktext-muya/src/block/extra/diagram/diagramPreview";
 import { BLOCK_DOM_PROPERTY } from "../vendor/marktext-muya/src/config";
 import { getCursorReference } from "../vendor/marktext-muya/src/selection";
+import { encodeImageSrc, getImageInfo, type IImageInfo } from "../vendor/marktext-muya/src/utils/image";
 import {
   classifyMermaidDiagramSize,
   createMermaidRenderConfig,
@@ -109,6 +111,14 @@ function normalizeMermaidViewBox(target: HTMLElement) {
 
 function normalizeMarkdownForEngine(markdown: string) {
   return markdown.replace(/\r\n?/g, "\n");
+}
+
+function escapeHtmlAttribute(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 type MarkdownEditorOptions = {
@@ -367,6 +377,11 @@ export class MarkdownEditorBridge {
   private lastSearch: { value: string; options: MarkdownSearchOptions } | null = null;
   private searchSelection: MarkdownSelectionRange | null = null;
   private tableContextCell: TableBodyCell | null = null;
+  private imageContext: {
+    wrapper: HTMLElement;
+    block: Format;
+    imageInfo: IImageInfo;
+  } | null = null;
   private appearanceSignature: string;
 
   constructor(options: MarkdownEditorOptions) {
@@ -578,6 +593,140 @@ export class MarkdownEditorBridge {
       ? block as TableBodyCell
       : null;
     return this.tableContextCell !== null;
+  }
+
+  captureImageContext(target: Element) {
+    const wrapper = target.closest<HTMLElement>(".mu-inline-image");
+    const content = wrapper?.closest<HTMLElement>(".mu-content");
+    const block = content
+      ? (content as unknown as Record<string, unknown>)[BLOCK_DOM_PROPERTY]
+      : null;
+    if (
+      !wrapper
+      || !wrapper.hasAttribute("data-raw")
+      || !block
+      || typeof block !== "object"
+      || !("updateImage" in block)
+      || !("replaceImage" in block)
+      || !("deleteImage" in block)
+    ) {
+      this.imageContext = null;
+      return false;
+    }
+    try {
+      this.imageContext = {
+        wrapper,
+        block: block as Format,
+        imageInfo: getImageInfo(wrapper),
+      };
+      return true;
+    } catch {
+      this.imageContext = null;
+      return false;
+    }
+  }
+
+  imageContextState() {
+    const context = this.imageContext;
+    if (!context) return null;
+    const { attrs } = context.imageInfo.token;
+    const image = context.wrapper.querySelector<HTMLImageElement>("img");
+    const src = attrs.src ?? "";
+    const width = Number.parseInt(attrs.width ?? "", 10);
+    return {
+      src,
+      alt: attrs.alt ?? "",
+      title: attrs.title ?? "",
+      align: attrs["data-align"] || "inline",
+      width: Number.isFinite(width) ? width : null,
+      naturalWidth: image?.naturalWidth || 0,
+      renderedWidth: Math.round(image?.getBoundingClientRect().width || 0),
+      isRemote: /^https?:\/\//i.test(src),
+      isLocal: Boolean(src) && !/^(?:https?:|data:|blob:)/i.test(src),
+      syntax: String(context.imageInfo.token.type) === "html_tag" ? "html" : "markdown",
+      markdown: context.imageInfo.token.raw,
+    };
+  }
+
+  replaceContextImage(src: string) {
+    const context = this.imageContext;
+    if (!context || !src) return;
+    const { attrs } = context.imageInfo.token;
+    context.block.replaceImage(context.imageInfo, {
+      alt: attrs.alt ?? "",
+      src,
+      title: attrs.title ?? "",
+    });
+    this.imageContext = null;
+    this.focus();
+  }
+
+  async runImageContextAction(action: string) {
+    const context = this.imageContext;
+    if (!context) return;
+    const state = this.imageContextState();
+    if (!state) return;
+    const { block, imageInfo, wrapper } = context;
+
+    if (action === "edit") {
+      const rect = wrapper.getBoundingClientRect();
+      this.muya.eventCenter.emit("muya-image-selector", {
+        block,
+        imageInfo,
+        reference: {
+          getBoundingClientRect: () => new DOMRect(rect.x, rect.y, rect.width, 0),
+        },
+      });
+      this.imageContext = null;
+      return;
+    }
+
+    if (action.startsWith("align-")) {
+      block.updateImage(imageInfo, "data-align", action.slice("align-".length));
+    } else if (action.startsWith("scale-")) {
+      const scale = action.slice("scale-".length);
+      const availableWidth = Math.max(80, this.root.clientWidth - 48);
+      const naturalWidth = state.naturalWidth || state.renderedWidth || availableWidth;
+      const width = scale === "fit"
+        ? Math.min(naturalWidth, availableWidth)
+        : scale === "original"
+          ? naturalWidth
+          : Math.max(1, Math.round(naturalWidth * Number.parseInt(scale, 10) / 100));
+      block.updateImage(imageInfo, "width", String(width));
+    } else if (action === "copy-markdown") {
+      await navigator.clipboard.writeText(state.markdown);
+    } else if (action === "delete") {
+      block.deleteImage(imageInfo);
+    } else if (action === "syntax-markdown" || action === "syntax-html") {
+      this.replaceImageSyntax(action.endsWith("markdown") ? "markdown" : "html");
+    } else {
+      return;
+    }
+
+    this.imageContext = null;
+    this.focus();
+  }
+
+  private replaceImageSyntax(syntax: "markdown" | "html") {
+    const context = this.imageContext;
+    if (!context) return;
+    const { block, imageInfo } = context;
+    const { token } = imageInfo;
+    const attrs = token.attrs;
+    let replacement: string;
+    if (syntax === "markdown") {
+      const alt = (attrs.alt ?? "").replace(/]/g, "\\]");
+      const title = (attrs.title ?? "").replace(/"/g, "\\\"");
+      replacement = `![${alt}](${encodeImageSrc(attrs.src ?? "")}${title ? ` "${title}"` : ""})`;
+    } else {
+      const htmlAttrs = Object.entries(attrs)
+        .filter(([name, value]) => value !== "" || name === "alt")
+        .map(([name, value]) => `${name}="${escapeHtmlAttribute(value)}"`)
+        .join(" ");
+      replacement = `<img ${htmlAttrs} />`;
+    }
+    block.text = `${block.text.slice(0, token.range.start)}${replacement}${block.text.slice(token.range.end)}`;
+    block.update();
   }
 
   tableContextState() {
