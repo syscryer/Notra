@@ -310,6 +310,13 @@ pub struct WorkspaceRenameRequest {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FileRenameRequest {
+    pub path: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WorkspacePathRequest {
     pub root: String,
     pub path: String,
@@ -377,6 +384,7 @@ pub fn run() {
             read_workspace,
             create_workspace_entry,
             rename_workspace_entry,
+            rename_file,
             delete_workspace_entry,
             reveal_workspace_entry,
             search_workspace,
@@ -605,6 +613,16 @@ async fn rename_workspace_entry(
             workspace: workspace_to_dto(&root),
             path: Some(next_path.display().to_string()),
         })
+    })
+    .await
+    .map_err(|err| format!("重命名任务失败：{err}"))?
+}
+
+#[tauri::command]
+async fn rename_file(request: FileRenameRequest) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        rename_file_in_place(&PathBuf::from(request.path), &request.name)
+            .map(|path| path.display().to_string())
     })
     .await
     .map_err(|err| format!("重命名任务失败：{err}"))?
@@ -916,6 +934,84 @@ fn sanitize_workspace_entry_name(value: &str) -> Result<String, String> {
         return Err("名称包含 Windows 不支持的字符".to_owned());
     }
     Ok(name.to_owned())
+}
+
+fn rename_file_in_place(path: &Path, requested_name: &str) -> Result<PathBuf, String> {
+    let metadata =
+        fs::metadata(path).map_err(|err| format!("读取文件失败：{}：{err}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("目标不是文件：{}", path.display()));
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| format!("无法取得父目录：{}", path.display()))?;
+    let name = sanitize_workspace_entry_name(requested_name)?;
+    let next_path = parent.join(name);
+    if next_path == path {
+        return Ok(path.to_path_buf());
+    }
+    if next_path.exists() {
+        return Err(format!("目标已存在：{}", next_path.display()));
+    }
+    fs::rename(path, &next_path).map_err(|err| format!("重命名失败：{err}"))?;
+    Ok(next_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rename_file_in_place;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_test_dir(label: &str) -> std::path::PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("notra-{label}-{}-{nonce}", std::process::id()))
+    }
+
+    #[test]
+    fn rename_file_in_place_updates_only_the_name() {
+        let dir = unique_test_dir("rename-file");
+        fs::create_dir_all(&dir).expect("create test directory");
+        let source = dir.join("before.txt");
+        fs::write(&source, "unchanged").expect("write source file");
+
+        let renamed = rename_file_in_place(&source, "after.sql").expect("rename file");
+
+        assert_eq!(renamed, dir.join("after.sql"));
+        assert_eq!(
+            fs::read_to_string(&renamed).expect("read renamed file"),
+            "unchanged"
+        );
+        assert!(!source.exists());
+        fs::remove_dir_all(&dir).expect("remove test directory");
+    }
+
+    #[test]
+    fn rename_file_in_place_does_not_overwrite_an_existing_file() {
+        let dir = unique_test_dir("rename-conflict");
+        fs::create_dir_all(&dir).expect("create test directory");
+        let source = dir.join("before.txt");
+        let existing = dir.join("existing.txt");
+        fs::write(&source, "source").expect("write source file");
+        fs::write(&existing, "existing").expect("write existing file");
+
+        let error = rename_file_in_place(&source, "existing.txt").expect_err("rename should fail");
+
+        assert!(error.contains("目标已存在"));
+        assert_eq!(
+            fs::read_to_string(&source).expect("read source file"),
+            "source"
+        );
+        assert_eq!(
+            fs::read_to_string(&existing).expect("read existing file"),
+            "existing"
+        );
+        fs::remove_dir_all(&dir).expect("remove test directory");
+    }
 }
 
 fn search_report_to_dto(report: DirectorySearchReport) -> SearchReportDto {

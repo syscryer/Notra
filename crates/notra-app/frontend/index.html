@@ -108,6 +108,7 @@
           <button class="tool-button" id="redoButton" aria-label="重做" title="重做"><span class="icon-slot" data-icon="Redo2"></span><span data-label>重做</span></button>
           <button class="tool-button" id="uppercaseButton" aria-label="转为大写" title="转为大写"><span class="icon-slot" data-icon="CaseUpper"></span><span data-label>转为大写</span></button>
           <button class="tool-button" id="lowercaseButton" aria-label="转为小写" title="转为小写"><span class="icon-slot" data-icon="CaseLower"></span><span data-label>转为小写</span></button>
+          <button class="tool-button" id="formatDocumentButton" aria-label="格式化文档 Shift+Alt+F" title="格式化文档 Shift+Alt+F" aria-keyshortcuts="Shift+Alt+F"><span class="icon-slot" data-icon="Braces"></span><span data-label>格式化文档</span></button>
           <span class="tool-divider"></span>
           <button class="tool-button" id="findButton" aria-label="查找 Ctrl+F" title="查找 Ctrl+F" aria-keyshortcuts="Control+F"><span class="icon-slot" data-icon="Search"></span><span data-label>查找</span></button>
           <button class="tool-button" id="replaceButton" aria-label="替换 Ctrl+H" title="替换 Ctrl+H" aria-keyshortcuts="Control+H"><span class="icon-slot" data-icon="Replace"></span><span data-label>替换</span></button>
@@ -132,6 +133,7 @@
       <section class="popover app-menu hidden" id="fileMenu" role="menu" aria-label="文件菜单">
         <div class="menu-list">
           <button class="menu-row" id="menuNewButton" role="menuitem"><span class="icon-slot" data-icon="FilePlus2"></span><strong>新建</strong><small>Ctrl+N</small></button>
+          <button class="menu-row" id="menuNewMarkdownButton" role="menuitem"><span class="icon-slot" data-icon="NotebookPen"></span><strong>新建 Markdown</strong><small></small></button>
           <button class="menu-row" id="menuOpenButton" role="menuitem"><span class="icon-slot" data-icon="FolderOpen"></span><strong>打开文件</strong><small>Ctrl+O</small></button>
           <button class="menu-row" id="menuRecentButton" role="menuitem"><span class="icon-slot" data-icon="History"></span><strong>最近打开</strong><small></small></button>
           <button class="menu-row" id="menuWorkspaceButton" role="menuitem"><span class="icon-slot" data-icon="FolderTree"></span><strong>打开工作区</strong><small></small></button>
@@ -152,6 +154,7 @@
           <div class="menu-divider"></div>
           <button class="menu-row" id="menuUppercaseButton" role="menuitem"><span class="icon-slot" data-icon="CaseUpper"></span><strong>转为大写</strong><small></small></button>
           <button class="menu-row" id="menuLowercaseButton" role="menuitem"><span class="icon-slot" data-icon="CaseLower"></span><strong>转为小写</strong><small></small></button>
+          <button class="menu-row" id="menuFormatDocumentButton" role="menuitem"><span class="icon-slot" data-icon="Braces"></span><strong>格式化文档</strong><small>Shift+Alt+F</small></button>
           <div class="menu-divider"></div>
           <button class="menu-row" id="menuSelectAllButton" role="menuitem"><span class="icon-slot" data-icon="Check"></span><strong>全选</strong><small>Ctrl+A</small></button>
         </div>
@@ -182,7 +185,22 @@
       </section>
 
       <section class="tabs" id="tabsBar">
-        <div class="tabs-list" id="tabs"></div>
+        <div class="tabs-list" id="tabs" role="tablist" aria-label="打开的文档"></div>
+        <div class="tab-scroll-controls hidden" id="tabScrollControls" role="group" aria-label="标签滚动">
+          <button class="tab-scroll-button" id="tabScrollLeftButton" type="button" aria-label="向左滚动标签" title="向左滚动标签">
+            <span class="icon-slot" data-icon="ChevronLeft"></span>
+          </button>
+          <button class="tab-scroll-button" id="tabScrollRightButton" type="button" aria-label="向右滚动标签" title="向右滚动标签">
+            <span class="icon-slot" data-icon="ChevronRight"></span>
+          </button>
+          <button class="tab-scroll-button" id="tabOverflowButton" type="button" data-menu-trigger aria-label="显示不可见标签" title="显示不可见标签" aria-haspopup="menu" aria-controls="tabOverflowMenu" aria-expanded="false">
+            <span class="icon-slot" data-icon="ChevronDown"></span>
+          </button>
+        </div>
+      </section>
+
+      <section class="popover tab-overflow-menu hidden" id="tabOverflowMenu" role="menu" aria-label="不可见标签">
+        <div class="tab-overflow-list" id="tabOverflowList"></div>
       </section>
 
       <section class="workspace" id="workspace">
@@ -706,6 +724,7 @@
         <div class="menu-list">
           <button class="menu-row" id="tabSaveButton" role="menuitem"><span class="icon-slot" data-icon="Save"></span><strong>保存</strong><small>Ctrl+S</small></button>
           <button class="menu-row" id="tabSaveAsButton" role="menuitem"><span class="icon-slot" data-icon="SavePlus"></span><strong>另存为</strong><small></small></button>
+          <button class="menu-row" id="tabRenameButton" role="menuitem"><span class="icon-slot" data-icon="Edit3"></span><strong>重命名</strong><small></small></button>
           <div class="menu-divider"></div>
           <button class="menu-row" id="tabCopyPathButton" role="menuitem"><span class="icon-slot" data-icon="Copy"></span><strong>复制路径</strong><small></small></button>
           <button class="menu-row" id="tabRevealButton" role="menuitem"><span class="icon-slot" data-icon="ExternalLink"></span><strong>在资源管理器中显示</strong><small></small></button>

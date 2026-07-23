@@ -19,6 +19,7 @@ import {
   CaseUpper,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleX,
@@ -124,6 +125,8 @@ import htmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import "monaco-editor/esm/vs/basic-languages/monaco.contribution";
 import "monaco-editor/esm/vs/editor/contrib/linesOperations/browser/linesOperations";
+import "monaco-editor/esm/vs/editor/contrib/bracketMatching/browser/bracketMatching";
+import "monaco-editor/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter";
 import "monaco-editor/esm/vs/language/json/monaco.contribution";
 import "./styles.css";
 
@@ -259,6 +262,12 @@ interface AppCommand {
   when?: () => boolean;
   allowInInput?: boolean;
   priority?: number;
+}
+
+interface SqlFormatWorkerResponse {
+  id: number;
+  text?: string;
+  error?: string;
 }
 
 interface DraftDocumentSnapshot {
@@ -834,6 +843,15 @@ let recordingKeybindingTimer = 0;
 const collapsedKeybindingCategories = new Set<CommandCategory>(KEYBINDING_CATEGORY_ORDER.slice(1));
 let bookmarkDecorations: monaco.editor.IEditorDecorationsCollection | null = null;
 let tabMenuDocumentId = 0;
+let renderedTabsSignature = "";
+let tabScrollFrame = 0;
+let tabScrollResizeObserver: ResizeObserver | null = null;
+let sqlFormatterWorker: Worker | null = null;
+let sqlFormatterRequestId = 0;
+const pendingSqlFormats = new globalThis.Map<number, {
+  resolve: (text: string) => void;
+  reject: (error: Error) => void;
+}>();
 let treeMenuTarget: TreeContextTarget | null = null;
 let busyDepth = 0;
 let editorBusyDepth = 0;
@@ -905,6 +923,7 @@ type TextInputOptions = {
   label: string;
   value?: string;
   inputMode?: "text" | "numeric";
+  selectBaseName?: boolean;
 };
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -924,6 +943,7 @@ const lucideIcons: Record<string, IconNode> = {
   CaseUpper,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleAlert,
   CircleX,
@@ -1134,6 +1154,7 @@ function bootstrap() {
   registerMdx();
   registerToml();
   registerCompletionProviders();
+  registerFormattingProviders();
   defineThemes();
   renderIconSlots();
 
@@ -1216,6 +1237,7 @@ function bootstrap() {
   bindKeybindings();
 
   bindActions();
+  bindTabScroller();
   bindFileDrop();
   bindWindowControls();
   bindWindowCloseGuard();
@@ -1247,6 +1269,159 @@ function markAppReady() {
       $("bootSplash")?.remove();
     });
   });
+}
+
+function bindTabScroller() {
+  const tabs = $("tabs");
+  $("tabScrollLeftButton").addEventListener("click", () => scrollTabs("left"));
+  $("tabScrollRightButton").addEventListener("click", () => scrollTabs("right"));
+  $("tabOverflowButton").addEventListener("click", toggleTabOverflowMenu);
+  tabs.addEventListener("scroll", scheduleTabScrollStateUpdate, { passive: true });
+  tabScrollResizeObserver?.disconnect();
+  tabScrollResizeObserver = new ResizeObserver(scheduleTabScrollStateUpdate);
+  tabScrollResizeObserver.observe(tabs);
+  tabScrollResizeObserver.observe($("tabsBar"));
+}
+
+function scrollTabs(direction: "left" | "right") {
+  const tabs = $("tabs");
+  const distance = Math.max(128, Math.floor(tabs.clientWidth * 0.58));
+  tabs.scrollBy({
+    behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    left: direction === "left" ? -distance : distance,
+  });
+}
+
+function scheduleTabScrollStateUpdate() {
+  window.cancelAnimationFrame(tabScrollFrame);
+  tabScrollFrame = window.requestAnimationFrame(updateTabScrollState);
+}
+
+function updateTabScrollState() {
+  tabScrollFrame = 0;
+  const bar = $("tabsBar");
+  const tabs = $("tabs");
+  const controls = $("tabScrollControls");
+  const controlsVisible = !controls.classList.contains("hidden");
+  const barGap = Number.parseFloat(window.getComputedStyle(bar).columnGap) || 0;
+  const reclaimableWidth = controlsVisible ? controls.offsetWidth + barGap : 0;
+  const hasOverflow = tabs.scrollWidth > tabs.clientWidth + reclaimableWidth + 1;
+  controls.classList.toggle("hidden", !hasOverflow);
+  if (!controlsVisible && hasOverflow) revealActiveTab();
+
+  const maxScrollLeft = Math.max(0, tabs.scrollWidth - tabs.clientWidth);
+  $<HTMLButtonElement>("tabScrollLeftButton").disabled = !hasOverflow || tabs.scrollLeft <= 1;
+  $<HTMLButtonElement>("tabScrollRightButton").disabled =
+    !hasOverflow || tabs.scrollLeft >= maxScrollLeft - 1;
+  const invisibleTabs = hasOverflow ? invisibleTabDocuments() : [];
+  $<HTMLButtonElement>("tabOverflowButton").disabled = invisibleTabs.length === 0;
+  if (!hasOverflow || invisibleTabs.length === 0) {
+    closeTabOverflowMenu();
+  } else if (!$("tabOverflowMenu").classList.contains("hidden")) {
+    renderTabOverflowList(invisibleTabs);
+  }
+}
+
+function revealActiveTab() {
+  window.requestAnimationFrame(() => {
+    $("tabs").querySelector<HTMLElement>(".tab.active")?.scrollIntoView({
+      behavior: "auto",
+      block: "nearest",
+      inline: "nearest",
+    });
+    scheduleTabScrollStateUpdate();
+  });
+}
+
+function invisibleTabDocuments() {
+  const tabs = $("tabs");
+  const viewport = tabs.getBoundingClientRect();
+  return state.documents.filter((doc) => {
+    const tab = tabs.querySelector<HTMLElement>(`[data-document-id="${doc.id}"]`);
+    if (!tab) return false;
+    const rect = tab.getBoundingClientRect();
+    return rect.left < viewport.left - 1 || rect.right > viewport.right + 1;
+  });
+}
+
+function toggleTabOverflowMenu() {
+  const menu = $("tabOverflowMenu");
+  if (!menu.classList.contains("hidden")) {
+    closeTabOverflowMenu();
+    $("tabOverflowButton").focus();
+    return;
+  }
+  openTabOverflowMenu();
+}
+
+function openTabOverflowMenu() {
+  const docs = invisibleTabDocuments();
+  if (docs.length === 0) return;
+  closeMenus();
+  renderTabOverflowList(docs);
+
+  const appRect = $("app").getBoundingClientRect();
+  const triggerRect = $("tabOverflowButton").getBoundingClientRect();
+  const menu = $("tabOverflowMenu");
+  menu.style.visibility = "hidden";
+  menu.classList.remove("hidden");
+  const width = menu.offsetWidth || 360;
+  const left = Math.max(8, Math.min(triggerRect.right - appRect.left - width, appRect.width - width - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${triggerRect.bottom - appRect.top + 4}px`;
+  menu.style.visibility = "visible";
+  $("tabOverflowButton").setAttribute("aria-expanded", "true");
+  menu.querySelector<HTMLButtonElement>(".tab-overflow-open")?.focus();
+}
+
+function closeTabOverflowMenu() {
+  $("tabOverflowMenu").classList.add("hidden");
+  $("tabOverflowButton").setAttribute("aria-expanded", "false");
+}
+
+function renderTabOverflowList(docs = invisibleTabDocuments()) {
+  const list = $("tabOverflowList");
+  list.innerHTML = "";
+  for (const doc of docs) {
+    const item = document.createElement("div");
+    const active = doc.id === state.activeId;
+    item.className = `tab-overflow-item ${active ? "active" : ""}`;
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = `tab-overflow-open menu-row ${active ? "active" : ""}`;
+    open.setAttribute("role", "menuitem");
+    open.title = doc.path || doc.title;
+    const icon = document.createElement("span");
+    icon.className = "tab-icon-wrap";
+    icon.innerHTML = documentTabIcon(doc);
+    const title = document.createElement("strong");
+    title.className = "tab-title";
+    title.textContent = doc.title;
+    open.append(icon, title);
+    if (doc.dirty) {
+      const dirty = document.createElement("span");
+      dirty.className = "tab-dirty-dot";
+      dirty.title = "未保存";
+      open.appendChild(dirty);
+    }
+    open.addEventListener("click", () => {
+      closeTabOverflowMenu();
+      activateDocument(doc.id);
+    });
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "tab-overflow-close";
+    close.title = `关闭 ${doc.title}`;
+    close.setAttribute("aria-label", `关闭 ${doc.title}`);
+    close.innerHTML = iconSvg("X");
+    close.addEventListener("click", async () => {
+      if (await closeDocument(doc.id)) scheduleTabScrollStateUpdate();
+    });
+    item.append(open, close);
+    list.appendChild(item);
+  }
 }
 
 function bindFileDrop() {
@@ -1311,6 +1486,7 @@ function registerAppCommands() {
   const markdownOnly = () => isEditorSurfaceFocused() && isMarkdownLikeDocument();
   const commands: AppCommand[] = [
     command("file.new", "新建文件", "文件", newDocument, { allowInInput: true }),
+    command("file.newMarkdown", "新建 Markdown", "文件", newMarkdownDocument, { allowInInput: true }),
     command("file.open", "打开文件", "文件", () => openDocument(), { allowInInput: true }),
     command("file.openFolder", "打开工作区", "文件", () => chooseWorkspace(), { allowInInput: true }),
     command("file.openRecent", "最近打开", "文件", () => toggleMenu("recentMenu"), { allowInInput: true }),
@@ -1349,7 +1525,9 @@ function registerAppCommands() {
     editorCommand("editor.moveLineDown", "向下移动行", "editor.action.moveLinesDownAction", editorOnly),
     editorCommand("editor.toggleLineComment", "切换行注释", "editor.action.commentLine", editorOnly),
     editorCommand("editor.toggleBlockComment", "切换块注释", "editor.action.blockComment", editorOnly),
-    editorCommand("editor.formatDocument", "格式化文档", "editor.action.formatDocument", editorOnly),
+    command("editor.formatDocument", "格式化文档", "编辑", formatActiveDocument, {
+      when: () => editorOnly() && isFormattingActionSupported(),
+    }),
     editorCommand("editor.selectNextOccurrence", "选中下一个同词", "editor.action.addSelectionToNextFindMatch", editorOnly),
     editorCommand("editor.selectAllOccurrences", "选中所有同词", "editor.action.selectHighlights", editorOnly),
     editorCommand("editor.addCursorAbove", "在上方添加光标", "editor.action.insertCursorAbove", editorOnly),
@@ -1555,6 +1733,7 @@ function bindActions() {
   $("redoButton").addEventListener("click", redoEditor);
   $("uppercaseButton").addEventListener("click", transformToUppercase);
   $("lowercaseButton").addEventListener("click", transformToLowercase);
+  $("formatDocumentButton").addEventListener("click", () => void formatActiveDocument());
   $("tabs").addEventListener("mousedown", (event) => {
     if (event.button === 0 && event.target === event.currentTarget) event.preventDefault();
   });
@@ -1715,6 +1894,7 @@ function bindActions() {
   });
   $("tabSaveButton").addEventListener("click", () => void saveTabFromMenu(false));
   $("tabSaveAsButton").addEventListener("click", () => void saveTabFromMenu(true));
+  $("tabRenameButton").addEventListener("click", () => void renameTabFromMenu());
   $("tabCopyPathButton").addEventListener("click", () => void copyTabPath());
   $("tabRevealButton").addEventListener("click", () => void revealTabPath());
   $("tabCloseButton").addEventListener("click", () => void closeTabFromMenu());
@@ -1891,6 +2071,7 @@ function bindAppMenus() {
   }
 
   bindMenuAction("menuNewButton", newDocument);
+  bindMenuAction("menuNewMarkdownButton", newMarkdownDocument);
   bindMenuAction("menuOpenButton", () => void openDocument());
   bindMenuAction("menuRecentButton", () => toggleMenu("recentMenu"));
   bindMenuAction("menuWorkspaceButton", () => void enterWorkspaceMode());
@@ -1903,6 +2084,7 @@ function bindAppMenus() {
   bindMenuAction("menuRedoButton", redoEditor);
   bindMenuAction("menuUppercaseButton", transformToUppercase);
   bindMenuAction("menuLowercaseButton", transformToLowercase);
+  bindMenuAction("menuFormatDocumentButton", () => void formatActiveDocument());
   bindMenuAction("menuSelectAllButton", selectAllEditor);
   bindMenuAction("menuFindButton", () => {
     setFindView("find");
@@ -2850,8 +3032,8 @@ async function flushSessionBeforeClose() {
 
 async function confirmCloseAll() {
   for (const doc of state.documents) {
-    if (!doc.dirty || doc.readOnly) continue;
-    const choice = await askUnsavedChoice("退出 Notra", `"${doc.title}" 有未保存修改。`, doc.path || doc.title);
+    if (!shouldPromptToSave(doc)) continue;
+    const choice = await askUnsavedChoice("退出 Notra", `"${doc.title}" 有未保存修改。`, doc.path);
     if (choice === "cancel") return false;
     if (choice === "save") {
       try {
@@ -2861,9 +3043,6 @@ async function confirmCloseAll() {
         return false;
       }
       if (doc.dirty) return false;
-    }
-    if (choice === "discard" && !doc.path) {
-      doc.skipSessionRestore = true;
     }
   }
   return true;
@@ -2939,7 +3118,12 @@ function askTextInput(options: TextInputOptions): Promise<string | null> {
   input.inputMode = options.inputMode ?? "text";
   $("inputDialog").classList.remove("hidden");
   input.focus();
-  input.select();
+  if (options.selectBaseName) {
+    const extensionIndex = input.value.lastIndexOf(".");
+    input.setSelectionRange(0, extensionIndex > 0 ? extensionIndex : input.value.length);
+  } else {
+    input.select();
+  }
   return new Promise((resolve) => {
     textInputResolver = resolve;
   });
@@ -3030,16 +3214,16 @@ function createDraftId() {
   return `${DRAFT_ID_PREFIX}-${Date.now().toString(36)}-${nextId.toString(36)}`;
 }
 
-function nextUntitledTitle() {
+function nextUntitledTitle(extension = "txt") {
   const used = new Set(state.documents.map((doc) => doc.title));
   let max = 0;
   for (const title of used) {
-    const match = title.match(/^Untitled-(\d+)\.txt$/);
+    const match = title.match(new RegExp(`^Untitled-(\\d+)\\.${extension}$`, "i"));
     if (match) max = Math.max(max, Number(match[1]));
   }
   let index = max + 1;
-  while (used.has(`Untitled-${index}.txt`)) index += 1;
-  return `Untitled-${index}.txt`;
+  while (used.has(`Untitled-${index}.${extension}`)) index += 1;
+  return `Untitled-${index}.${extension}`;
 }
 
 function activateDocument(id: number) {
@@ -3072,6 +3256,14 @@ function newDocument() {
   scheduleSessionSave();
 }
 
+function newMarkdownDocument() {
+  const doc = createUntitledMarkdownDocument();
+  state.documents.push(doc);
+  activateDocument(doc.id);
+  log(`新建 ${doc.title}`);
+  scheduleSessionSave();
+}
+
 function createUntitledDocument() {
   return createDocument({
     title: nextUntitledTitle(),
@@ -3083,6 +3275,21 @@ function createUntitledDocument() {
     readOnly: false,
     readOnlyReason: null,
     language: "plaintext",
+    largeFile: false,
+  });
+}
+
+function createUntitledMarkdownDocument() {
+  return createDocument({
+    title: nextUntitledTitle("md"),
+    path: null,
+    text: "",
+    encoding: "UTF-8",
+    lineEnding: "LF",
+    fileSize: 0,
+    readOnly: false,
+    readOnlyReason: null,
+    language: "markdown",
     largeFile: false,
   });
 }
@@ -3372,8 +3579,8 @@ async function reopenClosedDocument() {
 }
 
 async function confirmDocumentCanClose(doc: OpenDocument, title: string) {
-  if (!doc.dirty || doc.readOnly) return true;
-  const choice = await askUnsavedChoice(title, `"${doc.title}" 有未保存修改。`, doc.path || doc.title);
+  if (!shouldPromptToSave(doc)) return true;
+  const choice = await askUnsavedChoice(title, `"${doc.title}" 有未保存修改。`, doc.path);
   if (choice === "cancel") return false;
   if (choice !== "save") return true;
   try {
@@ -3385,13 +3592,20 @@ async function confirmDocumentCanClose(doc: OpenDocument, title: string) {
   return !doc.dirty;
 }
 
+function shouldPromptToSave<T extends Pick<OpenDocument, "dirty" | "path" | "readOnly">>(
+  doc: T,
+): doc is T & { path: string } {
+  return doc.dirty && typeof doc.path === "string" && doc.path.length > 0 && !doc.readOnly;
+}
+
 function openTabMenu(id: number, event: MouseEvent) {
   event.preventDefault();
   tabMenuDocumentId = id;
   closeMenus();
+  document.querySelector<HTMLElement>(`.tab[data-document-id="${id}"]`)?.classList.add("context-open");
   const menu = $("tabMenu");
   updateTabMenuState();
-  showContextMenu(menu, event, 264, 330);
+  showContextMenu(menu, event, 264, 370);
 }
 
 function tabMenuDocument() {
@@ -3404,6 +3618,7 @@ function updateTabMenuState() {
   const savedClosableCount = state.documents.filter((item) => !item.dirty).length;
   $<HTMLButtonElement>("tabSaveButton").disabled = !doc || doc.readOnly || (!doc.dirty && Boolean(doc.path));
   $<HTMLButtonElement>("tabSaveAsButton").disabled = !doc || doc.readOnly;
+  $<HTMLButtonElement>("tabRenameButton").disabled = !doc;
   $<HTMLButtonElement>("tabCopyPathButton").disabled = !doc?.path;
   $<HTMLButtonElement>("tabRevealButton").disabled = !doc?.path;
   $<HTMLButtonElement>("tabCloseButton").disabled = !doc || state.documents.length <= 1;
@@ -3430,6 +3645,7 @@ function showContextMenu(menu: HTMLElement, event: MouseEvent, fallbackWidth: nu
 
 function activeContextMenu() {
   return [
+    $("tabOverflowMenu"),
     $("tabMenu"),
     $("treeMenu"),
     $("markdownContextMenu"),
@@ -3546,6 +3762,93 @@ async function saveTabFromMenu(forceSaveAs: boolean) {
   closeMenus();
   if (!doc) return;
   await saveDocument(doc, forceSaveAs);
+}
+
+async function renameTabFromMenu() {
+  const doc = tabMenuDocument();
+  closeMenus();
+  if (!doc) return;
+
+  let value = doc.title;
+  let subtitle = doc.path ? pathDirectory(doc.path) : "临时文档";
+  while (true) {
+    const name = await askTextInput({
+      title: "重命名",
+      subtitle,
+      label: "文件名称",
+      value,
+      selectBaseName: true,
+    });
+    if (name === null) return;
+    const error = validateFileName(name);
+    if (error) {
+      value = name;
+      subtitle = error;
+      continue;
+    }
+    if (name === doc.title) return;
+
+    try {
+      if (!doc.path) {
+        applyDocumentRename(doc, name);
+        renderAll();
+        scheduleSessionSave();
+      } else if (state.workspace && pathMatchesTarget(doc.path, state.workspace.root, true)) {
+        const oldPath = doc.path;
+        const result = await withBusy("重命名", () =>
+          invoke<WorkspaceMutationDto>("rename_workspace_entry", {
+            request: {
+              root: state.workspace!.root,
+              path: oldPath,
+              name,
+            },
+          }),
+        );
+        if (!result.path) throw new Error("重命名后未返回新路径");
+        updateOpenDocumentsForRename(oldPath, result.path, false);
+        state.workspace = result.workspace;
+        renderAll();
+        scheduleSessionSave();
+      } else {
+        const oldPath = doc.path;
+        const nextPath = await withBusy("重命名", () =>
+          invoke<string>("rename_file", { request: { path: oldPath, name } }),
+        );
+        updateOpenDocumentsForRename(oldPath, nextPath, false);
+        renderAll();
+        scheduleSessionSave();
+      }
+      log(`重命名为 ${name}`);
+      return;
+    } catch (error) {
+      value = name;
+      subtitle = `重命名失败：${String(error)}`;
+    }
+  }
+}
+
+function validateFileName(value: string) {
+  const name = value.trim();
+  if (!name) return "名称不能为空";
+  if (name === "." || name === "..") return "名称不能是 . 或 ..";
+  if (/[ .]$/.test(name)) return "名称不能以空格或点结尾";
+  if (/[\\/:*?\"<>|\0]/.test(name)) return "名称包含 Windows 不支持的字符";
+  return "";
+}
+
+function applyDocumentRename(doc: OpenDocument, name: string, nextPath?: string) {
+  const oldSessionKey = documentSessionKey(doc);
+  if (doc.id === state.activeId) syncMarkdownModelFromEditor(doc);
+  doc.title = name;
+  if (nextPath) doc.path = nextPath;
+  const language = languageFromFilePath(nextPath || name);
+  doc.language = language;
+  monaco.editor.setModelLanguage(doc.model, language);
+  const nextSessionKey = documentSessionKey(doc);
+  if (oldSessionKey !== nextSessionKey && state.bookmarks[oldSessionKey]) {
+    state.bookmarks[nextSessionKey] = state.bookmarks[oldSessionKey];
+    delete state.bookmarks[oldSessionKey];
+  }
 }
 
 async function copyTabPath() {
@@ -3883,14 +4186,21 @@ function updateOpenDocumentsForRename(oldPath: string, newPath: string, isDir: b
   for (const doc of state.documents) {
     if (!doc.path || !pathMatchesTarget(doc.path, oldPath, isDir)) continue;
     const nextPath = isDir ? replacePathPrefix(doc.path, oldPath, newPath) : newPath;
-    doc.path = nextPath;
     if (!isDir) {
-      doc.title = fileNameFromPath(nextPath);
-      const language = languageFromFilePath(nextPath);
-      doc.language = language;
-      monaco.editor.setModelLanguage(doc.model, language);
+      applyDocumentRename(doc, fileNameFromPath(nextPath), nextPath);
+    } else {
+      const oldSessionKey = documentSessionKey(doc);
+      doc.path = nextPath;
+      const nextSessionKey = documentSessionKey(doc);
+      if (oldSessionKey !== nextSessionKey && state.bookmarks[oldSessionKey]) {
+        state.bookmarks[nextSessionKey] = state.bookmarks[oldSessionKey];
+        delete state.bookmarks[oldSessionKey];
+      }
     }
   }
+  state.recentFiles = uniquePaths(state.recentFiles.map((path) =>
+    pathMatchesTarget(path, oldPath, isDir) ? (isDir ? replacePathPrefix(path, oldPath, newPath) : newPath) : path,
+  )).slice(0, 40);
 }
 
 function removeOpenDocumentsForDeletedPath(path: string, isDir: boolean) {
@@ -4891,7 +5201,9 @@ function applyEditorPerformanceProfile(doc: OpenDocument) {
     lineHeight: editorLineHeight(),
     folding: !large,
     links: !large,
-    occurrencesHighlight: large ? "off" : "singleFile",
+    // Keep current-word occurrences available for large documents too. The
+    // heavier selection and suggestion features remain disabled below.
+    occurrencesHighlight: "singleFile",
     selectionHighlight: !large,
     renderLineHighlight: large ? "none" : "line",
     quickSuggestions: large ? false : { other: true, comments: false, strings: false },
@@ -5010,54 +5322,30 @@ function currentMarkdownPreviewWidth() {
   return $("markdownPreview").getBoundingClientRect().width || $<HTMLElement>("editorArea").clientWidth * 0.42;
 }
 
-function renderChrome() {
-  const doc = activeDocument();
-  setButtonLabel("wordWrapButton", "自动换行", `自动换行 ${state.wordWrap ? "已开启" : "已关闭"}`);
-  $("wordWrapButton").classList.toggle("state-on", state.wordWrap);
-  $("wordWrapButton").setAttribute("aria-pressed", String(state.wordWrap));
-  setButtonLabel("languageButton", languageLabel(doc.language), `语言 ${languageLabel(doc.language)}`);
-  setButtonLabel("encodingButton", doc.encoding, `编码 ${doc.encoding}`);
-  $("encodingNotice").textContent = `${doc.encodingStatus} ${doc.encoding}`;
-  setButtonLabel("lineEndingButton", doc.lineEnding || "LF", `行尾 ${doc.lineEnding || "LF"}`);
-  const markdownDocument = isMarkdownLikeDocument(doc);
-  $("markdownModeControl").classList.toggle("hidden", !markdownDocument);
-  document.querySelectorAll<HTMLButtonElement>("[data-markdown-mode]").forEach((button) => {
-    const active = markdownDocument && button.dataset.markdownMode === state.markdownEditMode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  $<HTMLButtonElement>("saveButton").disabled = doc.readOnly || (Boolean(doc.path) && !doc.dirty);
-  $<HTMLButtonElement>("saveAsButton").disabled = doc.readOnly;
-  $<HTMLButtonElement>("saveAllButton").disabled = !state.documents.some((item) => item.dirty && !item.readOnly);
-  $<HTMLButtonElement>("uppercaseButton").disabled = doc.readOnly;
-  $<HTMLButtonElement>("lowercaseButton").disabled = doc.readOnly;
-  $<HTMLButtonElement>("menuSaveButton").disabled = $<HTMLButtonElement>("saveButton").disabled;
-  $<HTMLButtonElement>("menuSaveAsButton").disabled = $<HTMLButtonElement>("saveAsButton").disabled;
-  $<HTMLButtonElement>("menuSaveAllButton").disabled = $<HTMLButtonElement>("saveAllButton").disabled;
-  $<HTMLButtonElement>("menuUppercaseButton").disabled = doc.readOnly;
-  $<HTMLButtonElement>("menuLowercaseButton").disabled = doc.readOnly;
-  ["menuMarkdownWysiwygButton", "menuMarkdownSplitButton", "menuMarkdownSourceButton"].forEach((id) => {
-    $<HTMLButtonElement>(id).disabled = !markdownDocument;
-  });
-  $<HTMLButtonElement>("menuCloseWorkspaceButton").disabled = !state.workspace;
-  $("menuOutlineButton").classList.toggle("hidden", !isMarkdownLikeDocument(doc));
-  $("menuWordWrapButton").classList.toggle("active", state.wordWrap);
-  ["wysiwyg", "split", "source"].forEach((mode) => {
-    const button = $<HTMLButtonElement>(`menuMarkdown${mode[0].toUpperCase()}${mode.slice(1)}Button`);
-    const active = markdownDocument && state.markdownEditMode === mode;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-checked", String(active));
-  });
-  setThemeButton();
+function renderTabs() {
+  const signature = JSON.stringify(
+    state.documents.map((item) => ({
+      active: item.id === state.activeId,
+      dirty: item.dirty,
+      id: item.id,
+      path: item.path,
+      title: item.title,
+    })),
+  );
+  if (signature === renderedTabsSignature) return;
+  renderedTabsSignature = signature;
 
   const tabs = $("tabs");
+  const previousScrollLeft = tabs.scrollLeft;
   tabs.innerHTML = "";
   for (const item of state.documents) {
+    const active = item.id === state.activeId;
     const tab = document.createElement("div");
-    tab.className = `tab ${item.id === state.activeId ? "active" : ""}`;
+    tab.className = `tab ${active ? "active" : ""}`;
+    tab.dataset.documentId = String(item.id);
     tab.setAttribute("role", "tab");
-    tab.setAttribute("aria-selected", String(item.id === state.activeId));
-    tab.tabIndex = 0;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
     tab.title = item.path || item.title;
     const icon = document.createElement("span");
     icon.className = "tab-icon-wrap";
@@ -5101,6 +5389,53 @@ function renderChrome() {
     tab.appendChild(close);
     tabs.appendChild(tab);
   }
+  tabs.scrollLeft = previousScrollLeft;
+  revealActiveTab();
+}
+
+function renderChrome() {
+  const doc = activeDocument();
+  setButtonLabel("wordWrapButton", "自动换行", `自动换行 ${state.wordWrap ? "已开启" : "已关闭"}`);
+  $("wordWrapButton").classList.toggle("state-on", state.wordWrap);
+  $("wordWrapButton").setAttribute("aria-pressed", String(state.wordWrap));
+  setButtonLabel("languageButton", languageLabel(doc.language), `语言 ${languageLabel(doc.language)}`);
+  setButtonLabel("encodingButton", doc.encoding, `编码 ${doc.encoding}`);
+  $("encodingNotice").textContent = `${doc.encodingStatus} ${doc.encoding}`;
+  setButtonLabel("lineEndingButton", doc.lineEnding || "LF", `行尾 ${doc.lineEnding || "LF"}`);
+  const markdownDocument = isMarkdownLikeDocument(doc);
+  $("markdownModeControl").classList.toggle("hidden", !markdownDocument);
+  document.querySelectorAll<HTMLButtonElement>("[data-markdown-mode]").forEach((button) => {
+    const active = markdownDocument && button.dataset.markdownMode === state.markdownEditMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+  $<HTMLButtonElement>("saveButton").disabled = doc.readOnly || (Boolean(doc.path) && !doc.dirty);
+  $<HTMLButtonElement>("saveAsButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("saveAllButton").disabled = !state.documents.some((item) => item.dirty && !item.readOnly);
+  $<HTMLButtonElement>("uppercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("lowercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("menuSaveButton").disabled = $<HTMLButtonElement>("saveButton").disabled;
+  $<HTMLButtonElement>("menuSaveAsButton").disabled = $<HTMLButtonElement>("saveAsButton").disabled;
+  $<HTMLButtonElement>("menuSaveAllButton").disabled = $<HTMLButtonElement>("saveAllButton").disabled;
+  $<HTMLButtonElement>("menuUppercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("menuLowercaseButton").disabled = doc.readOnly;
+  $<HTMLButtonElement>("formatDocumentButton").disabled = doc.readOnly || !isFormattingActionSupported();
+  $<HTMLButtonElement>("menuFormatDocumentButton").disabled = doc.readOnly || !isFormattingActionSupported();
+  ["menuMarkdownWysiwygButton", "menuMarkdownSplitButton", "menuMarkdownSourceButton"].forEach((id) => {
+    $<HTMLButtonElement>(id).disabled = !markdownDocument;
+  });
+  $<HTMLButtonElement>("menuCloseWorkspaceButton").disabled = !state.workspace;
+  $("menuOutlineButton").classList.toggle("hidden", !isMarkdownLikeDocument(doc));
+  $("menuWordWrapButton").classList.toggle("active", state.wordWrap);
+  ["wysiwyg", "split", "source"].forEach((mode) => {
+    const button = $<HTMLButtonElement>(`menuMarkdown${mode[0].toUpperCase()}${mode.slice(1)}Button`);
+    const active = markdownDocument && state.markdownEditMode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+  });
+  setThemeButton();
+
+  renderTabs();
 
   $("statusBusy").innerHTML = state.busyMessage
     ? `<span class="busy-pill">${iconSvg("LoaderCircle")}${escapeHtml(state.busyMessage)}</span>`
@@ -5132,12 +5467,14 @@ function commandElementIds(): Record<string, string> {
   redoButton: "edit.redo",
   uppercaseButton: "edit.uppercase",
   lowercaseButton: "edit.lowercase",
+  formatDocumentButton: "editor.formatDocument",
   findButton: "search.find",
   replaceButton: "search.replace",
   goToLineButton: "navigation.goToLine",
   commandButton: "navigation.commandPalette",
   findRailButton: "search.workspaceFind",
   menuNewButton: "file.new",
+  menuNewMarkdownButton: "file.newMarkdown",
   menuOpenButton: "file.open",
   menuRecentButton: "file.openRecent",
   menuWorkspaceButton: "file.openFolder",
@@ -5150,6 +5487,7 @@ function commandElementIds(): Record<string, string> {
   menuRedoButton: "edit.redo",
   menuUppercaseButton: "edit.uppercase",
   menuLowercaseButton: "edit.lowercase",
+  menuFormatDocumentButton: "editor.formatDocument",
   menuSelectAllButton: "edit.selectAll",
   menuFindButton: "search.find",
   menuReplaceButton: "search.replace",
@@ -7181,6 +7519,8 @@ function activeAppMenu() {
 }
 
 function closeMenus() {
+  closeTabOverflowMenu();
+  document.querySelectorAll(".tab.context-open").forEach((tab) => tab.classList.remove("context-open"));
   $("languageMenu").classList.add("hidden");
   $("encodingMenu").classList.add("hidden");
   $("lineEndingMenu").classList.add("hidden");
@@ -7272,6 +7612,68 @@ function runEditorAction(actionId: string, successMessage?: string) {
   editor.trigger("command", actionId, null);
   editor.focus();
   if (successMessage) log(successMessage);
+}
+
+function isFormattingActionSupported(doc = activeDocument()) {
+  if (!editor || isMarkdownWysiwygActive(doc)) return false;
+  if (doc.language === "json" || doc.language === "sql") return true;
+  return editor.getAction("editor.action.formatDocument")?.isSupported() ?? false;
+}
+
+async function formatActiveDocument() {
+  const doc = activeDocument();
+  if (doc.readOnly || isMarkdownWysiwygActive()) return;
+  const action = editor.getAction("editor.action.formatDocument");
+  if (!isFormattingActionSupported(doc)) {
+    log(`${languageLabel(doc.language)} 暂无可用格式化器`);
+    return;
+  }
+
+  const before = doc.model.getValue();
+  if (doc.language === "json" && before.trim()) {
+    try {
+      JSON.parse(before);
+    } catch (error) {
+      log(`JSON 格式化失败：${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+  }
+
+  if (!before.trim()) {
+    log(`${languageLabel(doc.language)} 已是规范格式`);
+    return;
+  }
+
+  try {
+    if (doc.language === "sql") {
+      const options = doc.model.getOptions();
+      const formatted = await withBusy(
+        "正在格式化 SQL",
+        () => formatSqlInWorker(before, options.tabSize, !options.insertSpaces),
+        { lockEditor: false },
+      );
+      replaceModelText(doc.model, normalizeFormattedText(formatted, doc.model));
+    } else if (doc.language === "json" && !action?.isSupported()) {
+      const options = doc.model.getOptions();
+      const indentation = options.insertSpaces ? options.tabSize : "\t";
+      const formatted = JSON.stringify(JSON.parse(before), null, indentation);
+      replaceModelText(doc.model, normalizeFormattedText(formatted, doc.model));
+    } else {
+      await action?.run();
+    }
+    editor.focus();
+    const label = languageLabel(doc.language);
+    log(doc.model.getValue() === before ? `${label} 已是规范格式` : `${label} 已格式化`);
+  } catch (error) {
+    log(`${languageLabel(doc.language)} 格式化失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function normalizeFormattedText(text: string, model: monaco.editor.ITextModel) {
+  return text
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/\n/g, model.getEOL());
 }
 
 function undoEditor() {
@@ -8269,6 +8671,61 @@ function registerCompletionProviders() {
   }
 }
 
+function registerFormattingProviders() {
+  monaco.languages.registerDocumentFormattingEditProvider("sql", {
+    displayName: "Notra SQL Formatter",
+    async provideDocumentFormattingEdits(model, options, token) {
+      const source = model.getValue();
+      if (!source.trim()) return [];
+      const version = model.getVersionId();
+      const formatted = await withBusy(
+        "正在格式化 SQL",
+        () => formatSqlInWorker(source, options.tabSize, !options.insertSpaces),
+        { lockEditor: false },
+      );
+      if (token.isCancellationRequested || model.isDisposed() || model.getVersionId() !== version) return [];
+      const normalized = normalizeFormattedText(formatted, model);
+      if (normalized === source) return [];
+      return [{ range: model.getFullModelRange(), text: normalized }];
+    },
+  });
+}
+
+function formatSqlInWorker(source: string, tabSize: number, useTabs: boolean) {
+  const worker = ensureSqlFormatterWorker();
+  const id = ++sqlFormatterRequestId;
+  return new Promise<string>((resolve, reject) => {
+    pendingSqlFormats.set(id, { resolve, reject });
+    try {
+      worker.postMessage({ id, source, tabSize, useTabs });
+    } catch (error) {
+      pendingSqlFormats.delete(id);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+  });
+}
+
+function ensureSqlFormatterWorker() {
+  if (sqlFormatterWorker) return sqlFormatterWorker;
+  const worker = new Worker(new URL("./sqlFormatterWorker.ts", import.meta.url), { type: "module" });
+  worker.addEventListener("message", (event: MessageEvent<SqlFormatWorkerResponse>) => {
+    const pending = pendingSqlFormats.get(event.data.id);
+    if (!pending) return;
+    pendingSqlFormats.delete(event.data.id);
+    if (event.data.error) pending.reject(new Error(event.data.error));
+    else pending.resolve(event.data.text ?? "");
+  });
+  worker.addEventListener("error", (event) => {
+    const error = new Error(event.message || "SQL 格式化 Worker 异常");
+    pendingSqlFormats.forEach((pending) => pending.reject(error));
+    pendingSqlFormats.clear();
+    worker.terminate();
+    if (sqlFormatterWorker === worker) sqlFormatterWorker = null;
+  });
+  sqlFormatterWorker = worker;
+  return worker;
+}
+
 function defineThemes() {
   monaco.editor.defineTheme("notra-light", {
     base: "vs",
@@ -8299,6 +8756,11 @@ function defineThemes() {
       "editor.selectionBackground": "#dfe4ff",
       "editor.inactiveSelectionBackground": "#e8edf5",
       "editor.selectionHighlightBackground": "#add6ff66",
+      "editorBracketMatch.background": "#94a3b866",
+      "editorBracketMatch.border": "#00000000",
+      "editorBracketHighlight.foreground1": "#3238d8",
+      "editorBracketHighlight.foreground2": "#0f8a5f",
+      "editorBracketHighlight.foreground3": "#b45309",
       "editor.wordHighlightBackground": "#d9e4f280",
       "editor.wordHighlightStrongBackground": "#c8dcf099",
       "editor.wordHighlightTextBackground": "#d9e4f280",
@@ -8339,6 +8801,11 @@ function defineThemes() {
       "editor.selectionBackground": "#313766",
       "editor.inactiveSelectionBackground": "#2a3140",
       "editor.selectionHighlightBackground": "#264f7866",
+      "editorBracketMatch.background": "#64748b80",
+      "editorBracketMatch.border": "#00000000",
+      "editorBracketHighlight.foreground1": "#858bff",
+      "editorBracketHighlight.foreground2": "#6ee7b7",
+      "editorBracketHighlight.foreground3": "#fbbf24",
       "editor.wordHighlightBackground": "#3a425580",
       "editor.wordHighlightStrongBackground": "#46546b99",
       "editor.wordHighlightTextBackground": "#3a425580",

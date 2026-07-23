@@ -549,6 +549,130 @@ select:focus-visible {
   display: none;
 }
 
+.tab-scroll-controls {
+  position: relative;
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding-left: 8px;
+  background:
+    linear-gradient(90deg, transparent, color-mix(in srgb, var(--surface-2) 88%, transparent) 8px),
+    var(--surface-2);
+}
+
+.tab-scroll-button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    opacity 120ms ease;
+}
+
+.tab-scroll-button .lucide-icon {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.8;
+}
+
+.tab-scroll-button:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.tab-scroll-button:disabled {
+  cursor: default;
+  opacity: 0.34;
+}
+
+.tab-scroll-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 38%, transparent);
+  outline-offset: -2px;
+}
+
+.tab-overflow-menu {
+  width: min(360px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 132px));
+  border-radius: 8px;
+}
+
+.tab-overflow-list {
+  max-height: min(410px, calc(100vh - 142px));
+  padding: 5px;
+  overflow: auto;
+}
+
+.tab-overflow-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: center;
+  border-radius: 6px;
+}
+
+.tab-overflow-item:hover,
+.tab-overflow-item.active {
+  background: var(--glass-row-hover);
+}
+
+.tab-overflow-item.active {
+  background: var(--glass-row-active);
+}
+
+.tab-overflow-open.menu-row {
+  width: 100%;
+  min-height: 32px;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 7px;
+  padding: 0 5px 0 7px;
+  border-radius: 6px;
+}
+
+.tab-overflow-open.menu-row:hover,
+.tab-overflow-open.menu-row:focus-visible,
+.tab-overflow-open.menu-row.active {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tab-overflow-open .tab-title {
+  font-weight: 400;
+}
+
+.tab-overflow-close {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: var(--text-3);
+  background: transparent;
+}
+
+.tab-overflow-close .lucide-icon {
+  width: 13px;
+  height: 13px;
+}
+
+.tab-overflow-close:hover,
+.tab-overflow-close:focus-visible {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  outline: none;
+}
+
 .right-sidebar-toggle {
   width: 28px;
   height: 28px;
@@ -580,7 +704,7 @@ select:focus-visible {
   min-width: 0;
   width: max-content;
   max-width: min(30vw, 260px);
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   border: 1px solid transparent;
   border-radius: 6px;
   color: var(--text-2);
@@ -597,6 +721,15 @@ select:focus-visible {
   background: var(--surface);
   border-color: var(--line);
   box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.tab.context-open:not(.active) {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--line));
+  box-shadow:
+    0 1px 2px color-mix(in srgb, var(--text) 7%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
 .tab-icon-wrap {

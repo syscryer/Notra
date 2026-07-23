@@ -22,6 +22,7 @@
     "monaco-editor": "0.53.0",
     "plantuml-encoder": "^1.4.0",
     "prismjs": "^1.30.0",
+    "sql-formatter": "^15.8.2",
     "vega": "^6.2.0",
     "vega-embed": "^7.1.0",
     "vega-lite": "^6.4.3"
