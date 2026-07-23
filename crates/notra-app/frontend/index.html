@@ -72,6 +72,31 @@
           <button class="app-menu-trigger" id="viewMenuButton" data-menu-trigger aria-haspopup="menu" aria-controls="viewMenu" aria-expanded="false">视图</button>
         </nav>
         <div class="title-drag-zone"></div>
+        <div class="app-update-anchor hidden" id="appUpdateAnchor">
+          <button class="title-button icon-only app-update-button hidden" id="appUpdateButton" aria-label="检查更新" title="检查更新" aria-expanded="false" aria-controls="appUpdatePopover">
+            <span class="icon-slot" data-icon="Download"></span>
+            <span class="app-update-dot" aria-hidden="true"></span>
+          </button>
+          <section class="app-update-popover hidden" id="appUpdatePopover" aria-label="软件更新" role="dialog">
+            <header>
+              <div>
+                <strong id="appUpdatePopoverTitle">发现新版本</strong>
+                <span id="appUpdatePopoverVersion">Notra</span>
+              </div>
+              <button class="app-update-close" id="appUpdateCloseButton" aria-label="关闭更新提示" title="关闭更新提示">
+                <span class="icon-slot" data-icon="X"></span>
+              </button>
+            </header>
+            <p id="appUpdatePopoverDetail">发现新的 Notra 版本</p>
+            <footer>
+              <span id="appUpdatePopoverStatus">可在后台下载，不影响当前工作</span>
+              <button class="settings-action app-update-install" id="appUpdatePopoverInstallButton">
+                <span class="icon-slot" data-icon="Download"></span>
+                <span>下载安装</span>
+              </button>
+            </footer>
+          </section>
+        </div>
         <section class="title-actions">
           <button class="title-button" id="themeButton" aria-label="切换主题" title="切换主题">
             <span class="icon-slot" data-icon="Moon"></span><span data-label>深色</span>

@@ -263,6 +263,172 @@ select:focus-visible {
   gap: 8px;
 }
 
+.app-update-anchor {
+  position: relative;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+
+.app-update-button {
+  position: relative;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--surface-2) 72%, transparent);
+  border-color: var(--line-soft);
+}
+
+.app-update-button:hover,
+.app-update-button.active {
+  color: var(--text);
+  background: var(--surface-3);
+  border-color: var(--line);
+}
+
+.app-update-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--surface);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary) 72%, var(--text-3));
+}
+
+.app-update-button.installing .app-update-dot {
+  animation: app-update-pulse 1.1s ease-in-out infinite;
+}
+
+.app-update-popover {
+  position: absolute;
+  z-index: 180;
+  top: calc(100% + 8px);
+  right: -76px;
+  width: min(340px, calc(100vw - 24px));
+  overflow: hidden;
+  border: 1px solid var(--glass-border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--glass-surface-strong);
+  box-shadow: var(--glass-shadow);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.08);
+  user-select: text;
+  animation: app-update-in 180ms ease-out;
+}
+
+.app-update-popover header,
+.app-update-popover footer {
+  display: flex;
+  align-items: center;
+}
+
+.app-update-popover header {
+  justify-content: space-between;
+  min-height: 58px;
+  padding: 11px 12px 10px 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.app-update-popover header > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.app-update-popover header strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.app-update-popover header span,
+.app-update-popover footer > span {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 450;
+}
+
+.app-update-popover p {
+  min-height: 54px;
+  margin: 0;
+  padding: 13px 14px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.app-update-popover footer {
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 50px;
+  padding: 8px 10px 8px 14px;
+  border-top: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--surface-2) 58%, transparent);
+}
+
+.app-update-popover footer > span {
+  min-width: 0;
+  line-height: 1.4;
+}
+
+.app-update-close {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-3);
+  background: transparent;
+}
+
+.app-update-close:hover {
+  color: var(--text);
+  border-color: var(--line-soft);
+  background: var(--surface-3);
+}
+
+.app-update-install {
+  min-width: 96px;
+  flex: 0 0 auto;
+  gap: 6px;
+  color: var(--text);
+  background: var(--surface);
+}
+
+.app-update-install .lucide-icon,
+.app-update-close .lucide-icon,
+.app-update-button .lucide-icon {
+  width: 15px;
+  height: 15px;
+}
+
+@keyframes app-update-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes app-update-pulse {
+  50% {
+    opacity: 0.42;
+    transform: scale(0.78);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-update-popover,
+  .app-update-button.installing .app-update-dot {
+    animation: none;
+  }
+}
+
 .title-button,
 .window-button {
   display: inline-flex;

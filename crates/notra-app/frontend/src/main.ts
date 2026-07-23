@@ -2030,6 +2030,10 @@ function bindActions() {
         closeFontDropdowns();
         return;
       }
+      if (!$<HTMLElement>("appUpdatePopover").classList.contains("hidden")) {
+        closeAppUpdatePopover();
+        return;
+      }
       if (!$("settingsPage").classList.contains("hidden")) {
         closeSettingsPage();
         return;
@@ -2044,6 +2048,9 @@ function bindActions() {
   });
   $("settingsCheckUpdateButton").addEventListener("click", () => void checkForAppUpdate(true));
   $("settingsInstallUpdateButton").addEventListener("click", () => void installAppUpdate());
+  $("appUpdateButton").addEventListener("click", toggleAppUpdatePopover);
+  $("appUpdateCloseButton").addEventListener("click", closeAppUpdatePopover);
+  $("appUpdatePopoverInstallButton").addEventListener("click", () => void installAppUpdate());
 
   editor.onDidChangeCursorPosition(renderChrome);
 }
@@ -2468,16 +2475,7 @@ async function checkForAppUpdate(manual: boolean) {
     appUpdateDetail = `发现新版本 ${update.version}，当前版本 ${update.currentVersion}`;
     renderAppUpdateStatus();
 
-    if (!manual) {
-      const confirmed = await askConfirm({
-        title: "发现新版本",
-        subtitle: `Notra ${update.version} 已发布`,
-        body: `当前版本 ${update.currentVersion}，是否现在下载并安装新版本？`,
-        okLabel: "下载并安装",
-        cancelLabel: "稍后",
-      });
-      if (confirmed) await installAppUpdate();
-    }
+    if (manual) openAppUpdatePopover();
   } catch (error) {
     appUpdateStatus = "failed";
     appUpdateDetail = manual ? "检查更新失败，请稍后重试" : `当前版本 ${appVersion} · 自动检查失败`;
@@ -2531,6 +2529,9 @@ function renderAppUpdateStatus() {
   const statusElement = $("settingsUpdateStatus");
   const checkButton = $<HTMLButtonElement>("settingsCheckUpdateButton");
   const installButton = $<HTMLButtonElement>("settingsInstallUpdateButton");
+  const updateButton = $<HTMLButtonElement>("appUpdateButton");
+  const popover = $("appUpdatePopover");
+  const popoverInstallButton = $<HTMLButtonElement>("appUpdatePopoverInstallButton");
   $("settingsAppVersion").textContent = appVersion;
   $("settingsProductVersion").textContent = `v${appVersion}`;
   $("settingsUpdateDetail").textContent = appUpdateDetail;
@@ -2541,6 +2542,64 @@ function renderAppUpdateStatus() {
   checkButton.textContent = appUpdateStatus === "checking" ? "检查中" : "检查更新";
   installButton.classList.toggle("hidden", appUpdateStatus !== "available");
   installButton.disabled = appUpdateStatus !== "available";
+
+  const hasPendingUpdate = Boolean(pendingAppUpdate);
+  const updateIndicatorVisible = hasPendingUpdate && ["available", "installing", "failed"].includes(appUpdateStatus);
+  $("appUpdateAnchor").classList.toggle("hidden", !updateIndicatorVisible);
+  updateButton.classList.toggle("hidden", !updateIndicatorVisible);
+  if (!updateIndicatorVisible) closeAppUpdatePopover();
+  updateButton.classList.toggle("installing", appUpdateStatus === "installing");
+  updateButton.classList.toggle("active", !popover.classList.contains("hidden"));
+  updateButton.setAttribute("aria-expanded", String(!popover.classList.contains("hidden")));
+  const updateLabel = appUpdateStatus === "installing"
+    ? "正在安装更新"
+    : appUpdateStatus === "failed"
+      ? "更新失败，点击查看"
+      : "有新版本可用，点击查看";
+  updateButton.setAttribute("aria-label", updateLabel);
+  updateButton.title = updateLabel;
+
+  if (pendingAppUpdate) {
+    const releaseNote = pendingAppUpdate.body
+      ?.split(/\r?\n/)
+      .map((line) => line.trim().replace(/^#+\s*/, ""))
+      .find(Boolean);
+    $("appUpdatePopoverTitle").textContent = appUpdateStatus === "installing" ? "正在安装更新" : "发现新版本";
+    $("appUpdatePopoverVersion").textContent = `Notra ${pendingAppUpdate.version} · 当前 ${pendingAppUpdate.currentVersion}`;
+    $("appUpdatePopoverDetail").textContent = appUpdateStatus === "installing"
+      ? appUpdateDetail
+      : appUpdateStatus === "failed"
+        ? "下载安装失败，请重试或稍后从设置中操作。"
+        : releaseNote || "有新的 Notra 版本可用。";
+    $("appUpdatePopoverStatus").textContent = appUpdateStatus === "installing"
+      ? "正在后台下载安装，完成后会自动重启"
+      : "可在后台下载，不影响当前工作";
+  }
+  const canInstall = hasPendingUpdate && (appUpdateStatus === "available" || appUpdateStatus === "failed");
+  popoverInstallButton.classList.toggle("hidden", !canInstall);
+  popoverInstallButton.disabled = !canInstall;
+  popoverInstallButton.querySelector("span:last-child")!.textContent = appUpdateStatus === "failed" ? "重试安装" : "下载安装";
+}
+
+function toggleAppUpdatePopover() {
+  if ($<HTMLElement>("appUpdatePopover").classList.contains("hidden")) openAppUpdatePopover();
+  else closeAppUpdatePopover();
+}
+
+function openAppUpdatePopover() {
+  if (!pendingAppUpdate) return;
+  closeMenus();
+  closeFontDropdowns();
+  const popover = $("appUpdatePopover");
+  popover.classList.remove("hidden");
+  $("appUpdateButton").classList.add("active");
+  $("appUpdateButton").setAttribute("aria-expanded", "true");
+}
+
+function closeAppUpdatePopover() {
+  $("appUpdatePopover").classList.add("hidden");
+  $("appUpdateButton").classList.remove("active");
+  $("appUpdateButton").setAttribute("aria-expanded", "false");
 }
 
 async function refreshSystemIntegrationStatus() {
@@ -3056,6 +3115,7 @@ function bindOutsideDismissal() {
       closeCurrentFindHistory();
     }
     if (!target.closest(".search-history-field, .search-history-menu")) closeSearchHistory();
+    if (!target.closest(".app-update-anchor")) closeAppUpdatePopover();
     if (
       target.closest(".popover, .command-popover, .find-popover, .modal, .font-dropdown") ||
       target.closest("[data-menu-trigger]")
