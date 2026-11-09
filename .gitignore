@@ -14,3 +14,7 @@ node_modules/
 *.swp
 Thumbs.db
 desktop.ini
+output/
+.playwright-cli/
+.env*
+!.env.example

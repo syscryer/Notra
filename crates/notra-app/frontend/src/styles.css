@@ -149,6 +149,14 @@ select:focus-visible {
   grid-template-columns: minmax(0, 1fr) var(--right-sidebar-width);
 }
 
+#app.toolbar-hidden {
+  grid-template-rows: 40px 0 34px minmax(0, 1fr) 30px;
+}
+
+#app.toolbar-hidden .toolbar {
+  display: none !important;
+}
+
 .titlebar,
 .toolbar,
 .tabs,
@@ -698,6 +706,7 @@ select:focus-visible {
 }
 
 .tabs-list {
+  position: relative;
   min-width: 0;
   flex: 1 1 auto;
   align-self: stretch;
@@ -863,6 +872,39 @@ select:focus-visible {
 .right-sidebar-toggle .lucide-icon {
   width: 17px;
   height: 17px;
+}
+
+.tab.tab-dragging-active {
+  z-index: 50 !important;
+  opacity: 0.98;
+  color: var(--text) !important;
+  background: var(--surface) !important;
+  border-color: color-mix(in srgb, var(--primary) 70%, var(--line)) !important;
+  box-shadow:
+    0 4px 14px color-mix(in srgb, var(--text) 20%, transparent),
+    0 1px 3px color-mix(in srgb, var(--text) 10%, transparent) !important;
+  cursor: grabbing !important;
+  pointer-events: none;
+  scale: 1.02;
+  will-change: transform;
+}
+
+.tab.tab-settling {
+  z-index: 50 !important;
+  scale: 1 !important;
+  color: var(--text) !important;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 7%, transparent) !important;
+  border-color: var(--line) !important;
+  background: var(--surface) !important;
+  cursor: grabbing !important;
+  pointer-events: none;
+  transition: transform 150ms cubic-bezier(0.2, 0, 0, 1), box-shadow 150ms ease, scale 150ms ease !important;
+}
+
+body.tab-reordering,
+body.tab-reordering * {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 
 .tab {
@@ -2067,6 +2109,11 @@ body.dark .markdown-preview .token.variable {
   max-height: none;
 }
 
+.editor-context-menu {
+  width: 248px;
+  max-height: none;
+}
+
 .markdown-context-menu {
   width: 258px;
   max-height: none;
@@ -2330,6 +2377,18 @@ body.dark .markdown-preview .token.variable {
 .menu-row.danger.active {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+}
+
+.menu-row .menu-check {
+  opacity: 0;
+  color: var(--primary);
+  display: grid;
+  place-items: center;
+  transition: opacity 120ms ease;
+}
+
+.menu-row[aria-checked="true"] .menu-check {
+  opacity: 1;
 }
 
 .menu-row:disabled {

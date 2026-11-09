@@ -17,48 +17,9 @@
         background: #e8eef6;
         overflow: hidden;
       }
-
-      body.booting #app {
-        visibility: hidden;
-      }
-
-      .boot-splash {
-        position: fixed;
-        inset: 0;
-        z-index: 9999;
-        display: grid;
-        place-items: center;
-        color: #334155;
-        background: #e8eef6;
-        font: 600 13px "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif;
-      }
-
-      .boot-card {
-        display: grid;
-        justify-items: center;
-        gap: 12px;
-      }
-
-      .boot-mark {
-        width: 34px;
-        height: 34px;
-        border-radius: 8px;
-        display: block;
-        object-fit: contain;
-      }
-
-      body:not(.booting) .boot-splash {
-        display: none;
-      }
     </style>
   </head>
-  <body class="booting">
-    <div class="boot-splash" id="bootSplash" aria-hidden="true">
-      <div class="boot-card">
-        <img class="boot-mark" src="/icon.png" alt="" />
-        <div>正在启动 Notra</div>
-      </div>
-    </div>
+  <body>
     <main id="app">
       <header class="titlebar" id="windowTitlebar">
         <section class="brand">
@@ -118,7 +79,7 @@
         </section>
       </header>
 
-      <nav class="toolbar">
+      <nav class="toolbar" id="toolbar">
         <div class="tool-group primary-actions" aria-label="常用工具">
           <button class="tool-button" id="newButton" aria-label="新建 Ctrl+N" title="新建 Ctrl+N" aria-keyshortcuts="Control+N"><span class="icon-slot" data-icon="FilePlus2"></span><span data-label>新建</span></button>
           <button class="tool-button" id="openButton" aria-label="打开文件 Ctrl+O" title="打开文件 Ctrl+O" aria-keyshortcuts="Control+O"><span class="icon-slot" data-icon="FolderOpen"></span><span data-label>打开文件</span></button>
@@ -199,7 +160,10 @@
 
       <section class="popover app-menu hidden" id="viewMenu" role="menu" aria-label="视图菜单">
         <div class="menu-list">
+          <button class="menu-row" id="menuToolbarButton" role="menuitemcheckbox" aria-checked="true"><span class="icon-slot menu-check" data-icon="Check"></span><strong>工具栏</strong><small></small></button>
+          <div class="menu-divider"></div>
           <button class="menu-row" id="menuWordWrapButton" role="menuitem"><span class="icon-slot" data-icon="WrapText"></span><strong>自动换行</strong><small></small></button>
+          <button class="menu-row" id="menuColumnSelectionButton" role="menuitemcheckbox" aria-checked="false"><span class="icon-slot menu-check" data-icon="Check"></span><strong>列编辑模式</strong><small></small></button>
           <button class="menu-row" id="menuMarkdownWysiwygButton" role="menuitemradio"><span class="icon-slot" data-icon="NotebookPen"></span><strong>Markdown 即时编辑</strong><small></small></button>
           <button class="menu-row" id="menuMarkdownSplitButton" role="menuitemradio"><span class="icon-slot" data-icon="Columns2"></span><strong>Markdown 分屏预览</strong><small></small></button>
           <button class="menu-row" id="menuMarkdownSourceButton" role="menuitemradio"><span class="icon-slot" data-icon="FileCode2"></span><strong>Markdown 源码</strong><small></small></button>
@@ -228,9 +192,9 @@
         <div class="tab-overflow-list" id="tabOverflowList"></div>
       </section>
 
-      <section class="workspace" id="workspace">
+      <section class="workspace single-mode" id="workspace">
         <aside class="activity-rail" id="activityRail">
-          <button class="rail-button active" id="directoryToggle" aria-label="目录" title="目录">
+          <button class="rail-button" id="directoryToggle" aria-label="目录" title="目录">
             <span class="icon-slot" data-icon="FolderTree"></span>
           </button>
           <button class="rail-button" id="findRailButton" aria-label="在文件中查找 Ctrl+Shift+F" title="在文件中查找 Ctrl+Shift+F" aria-keyshortcuts="Control+Shift+F">
@@ -524,6 +488,28 @@
                 </div>
               </div>
               <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="Columns2"></span>
+                <div>
+                  <strong>列编辑模式</strong>
+                  <span>使用矩形列块进行选择与编辑</span>
+                </div>
+                <div class="seg-control" id="settingsColumnSelectionControl">
+                  <button data-value="off">关闭</button>
+                  <button data-value="on">开启</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <span class="settings-row-icon icon-slot" data-icon="MousePointerClick"></span>
+                <div>
+                  <strong>拖动选中文本</strong>
+                  <span>拖拽移动选区，按住 Ctrl 拖拽复制</span>
+                </div>
+                <div class="seg-control" id="settingsDragAndDropControl">
+                  <button data-value="off">关闭</button>
+                  <button data-value="on">开启</button>
+                </div>
+              </div>
+              <div class="settings-row">
                 <span class="settings-row-icon icon-slot" data-icon="Map"></span>
                 <div>
                   <strong>缩略图</strong>
@@ -784,6 +770,27 @@
           <button class="menu-row" id="treeCopyPathButton" role="menuitem"><span class="icon-slot" data-icon="Copy"></span><strong>复制路径</strong><small></small></button>
           <button class="menu-row" id="treeRevealButton" role="menuitem"><span class="icon-slot" data-icon="ExternalLink"></span><strong>在资源管理器中显示</strong><small></small></button>
           <button class="menu-row" id="treeRefreshButton" role="menuitem"><span class="icon-slot" data-icon="RefreshCw"></span><strong>刷新目录</strong><small></small></button>
+        </div>
+      </section>
+
+      <section class="popover editor-context-menu hidden" id="editorContextMenu" role="menu" aria-label="编辑器右键菜单">
+        <div class="menu-list">
+          <button class="menu-row" id="editorCutButton" role="menuitem"><span class="icon-slot" data-icon="Scissors"></span><strong>剪切</strong><small>Ctrl+X</small></button>
+          <button class="menu-row" id="editorCopyButton" role="menuitem"><span class="icon-slot" data-icon="Copy"></span><strong>复制</strong><small>Ctrl+C</small></button>
+          <button class="menu-row" id="editorPasteButton" role="menuitem"><span class="icon-slot" data-icon="ClipboardPaste"></span><strong>粘贴</strong><small>Ctrl+V</small></button>
+          <button class="menu-row" id="editorPastePlainButton" role="menuitem"><span class="icon-slot" data-icon="ClipboardPaste"></span><strong>粘贴为纯文本</strong><small>Ctrl+Shift+V</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="editorSelectAllButton" role="menuitem"><span class="icon-slot" data-icon="Check"></span><strong>全选</strong><small>Ctrl+A</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="editorUndoButton" role="menuitem"><span class="icon-slot" data-icon="Undo2"></span><strong>撤销</strong><small>Ctrl+Z</small></button>
+          <button class="menu-row" id="editorRedoButton" role="menuitem"><span class="icon-slot" data-icon="Redo2"></span><strong>重做</strong><small>Ctrl+Y</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="editorUppercaseButton" role="menuitem"><span class="icon-slot" data-icon="CaseUpper"></span><strong>转为大写</strong><small>Ctrl+Shift+U</small></button>
+          <button class="menu-row" id="editorLowercaseButton" role="menuitem"><span class="icon-slot" data-icon="CaseLower"></span><strong>转为小写</strong><small>Ctrl+U</small></button>
+          <div class="menu-divider"></div>
+          <button class="menu-row" id="editorFindButton" role="menuitem"><span class="icon-slot" data-icon="Search"></span><strong>查找</strong><small>Ctrl+F</small></button>
+          <button class="menu-row" id="editorReplaceButton" role="menuitem"><span class="icon-slot" data-icon="Replace"></span><strong>替换</strong><small>Ctrl+H</small></button>
+          <button class="menu-row" id="editorFormatDocumentButton" role="menuitem"><span class="icon-slot" data-icon="Braces"></span><strong>格式化文档</strong><small>Shift+Alt+F</small></button>
         </div>
       </section>
 

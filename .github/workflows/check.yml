@@ -1,0 +1,47 @@
+name: Check
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: crates/notra-app/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install frontend dependencies
+        working-directory: crates/notra-app/frontend
+        run: npm ci
+      - name: Check editor and Markdown regressions
+        working-directory: crates/notra-app/frontend
+        run: |
+          npm run test:keybindings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:editor
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run test:markdown
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build frontend
+        working-directory: crates/notra-app/frontend
+        run: npm run build
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Test desktop app and core
+        run: cargo test --workspace --locked --features notra-app/custom-protocol

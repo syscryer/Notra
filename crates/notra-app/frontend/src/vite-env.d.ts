@@ -8,3 +8,21 @@ declare module "*?worker" {
   };
   export default WorkerFactory;
 }
+
+declare module "monaco-editor/esm/vs/editor/browser/controller/editContext/clipboardUtils.js" {
+  export const InMemoryClipboardMetadataManager: {
+    INSTANCE: {
+      get(text: string): {
+        isFromEmptySelection?: boolean;
+        multicursorText?: string[] | null;
+        mode?: string | null;
+      } | null;
+    };
+  };
+}
+
+declare module "monaco-editor/esm/vs/editor/browser/controller/editContext/native/nativeEditContextRegistry.js" {
+  export const NativeEditContextRegistry: {
+    get(editorId: string): { onWillCopy(): void } | undefined;
+  };
+}
